@@ -57,6 +57,7 @@ func WSServer(ctx context.Context) {
 		for {
 
 			token := r.Header.Get("Authorization")
+			awesome := r.Header.Get("awesome")
 			ek, at, err := GetAttestationData(token)
 			if err != nil {
 				fmt.Println("error", err.Error())
@@ -77,7 +78,7 @@ func WSServer(ctx context.Context) {
 			}
 
 			writer, _ := conn.NextWriter(websocket.BinaryMessage)
-			json.NewEncoder(writer).Encode(map[string]string{"foo": "bar"})
+			json.NewEncoder(writer).Encode(map[string]string{"foo": "bar", "header": awesome})
 		}
 	})
 
@@ -103,13 +104,12 @@ var _ = Describe("GET", func() {
 
 			WSServer(ctx)
 
-			msg, err := Get("http://localhost:8080/test", Emulated, WithSeed(1))
+			msg, err := Get("http://localhost:8080/test", Emulated, WithSeed(1), WithAdditionalHeader("awesome", "content"))
 			result := map[string]interface{}{}
 			json.Unmarshal(msg, &result)
 			Expect(err).ToNot(HaveOccurred())
-			Expect(result).To(Equal(map[string]interface{}{"foo": "bar"}))
+			Expect(result).To(Equal(map[string]interface{}{"foo": "bar", "header": "content"}))
 		})
-
 	})
 })
 

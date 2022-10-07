@@ -52,7 +52,7 @@ func ResolveToken(token string, opts ...Option) (bool, string, error) {
 
 // GetPubHash returns the EK's pub hash
 func GetPubHash(opts ...Option) (string, error) {
-	c := &config{}
+	c := newConfig()
 	c.apply(opts...)
 
 	ek, err := getEK(c)

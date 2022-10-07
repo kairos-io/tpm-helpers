@@ -21,7 +21,7 @@ import (
 // It will return the token as a string and the generated AK that should
 // be saved by the caller for later Authentication.
 func GetAuthToken(opts ...Option) (string, []byte, error) {
-	c := &config{}
+	c := newConfig()
 	c.apply(opts...)
 
 	attestationData, akBytes, err := getAttestationData(c)
@@ -41,7 +41,7 @@ func GetAuthToken(opts ...Option) (string, []byte, error) {
 // attestation server, will compute a challenge response via the TPM using the passed
 // Attestation Key (AK) and will send it back to the attestation server.
 func Authenticate(akBytes []byte, channel io.ReadWriter, opts ...Option) error {
-	c := &config{}
+	c := newConfig()
 	c.apply(opts...)
 
 	var challenge Challenge
@@ -64,7 +64,7 @@ func Authenticate(akBytes []byte, channel io.ReadWriter, opts ...Option) error {
 // Get retrieves a message from a remote ws server after
 // a successfully process of the TPM challenge
 func Get(url string, opts ...Option) ([]byte, error) {
-	c := &config{}
+	c := newConfig()
 	c.apply(opts...)
 
 	header := c.header
@@ -109,6 +109,10 @@ func Get(url string, opts ...Option) ([]byte, error) {
 	}
 
 	header.Add("Authorization", token)
+	for k, v := range c.headers {
+		header.Add(k, v)
+	}
+
 	wsURL := strings.Replace(url, "http", "ws", 1)
 	logrus.Infof("Using TPMHash %s to dial %s", hash, wsURL)
 	conn, resp, err := dialer.Dial(wsURL, header)

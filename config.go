@@ -15,8 +15,13 @@ type config struct {
 
 	cacerts []byte
 	header  http.Header
+	headers map[string]string
 
 	systemfallback bool
+}
+
+func newConfig() *config {
+	return &config{headers: make(map[string]string)}
 }
 
 // Option is a generic option for TPM configuration
@@ -49,6 +54,14 @@ func WithCAs(ca []byte) Option {
 func WithHeader(header http.Header) Option {
 	return func(c *config) error {
 		c.header = header
+		return nil
+	}
+}
+
+// WithAdditionalHeader adds a key to the request
+func WithAdditionalHeader(k, v string) Option {
+	return func(c *config) error {
+		c.headers[k] = v
 		return nil
 	}
 }
