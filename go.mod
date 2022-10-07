@@ -1,4 +1,4 @@
-module github.com/rancher-sandbox/go-tpm
+module github.com/kairos-io/go-tpm
 
 go 1.17
 

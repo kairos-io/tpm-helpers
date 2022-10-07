@@ -5,8 +5,8 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	. "github.com/rancher-sandbox/go-tpm"
-	. "github.com/rancher-sandbox/go-tpm/backend"
+	. "github.com/kairos-io/go-tpm"
+	. "github.com/kairos-io/go-tpm/backend"
 )
 
 var _ = Describe("Simulated TPM", func() {

@@ -14,7 +14,7 @@ import (
 	"github.com/google/go-attestation/attest"
 	"github.com/google/go-tpm-tools/simulator"
 	"github.com/pkg/errors"
-	"github.com/rancher-sandbox/go-tpm/backend"
+	"github.com/kairos-io/go-tpm/backend"
 )
 
 // GenerateChallenge generates a challenge from attestation data and a public endorsed key

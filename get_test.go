@@ -12,7 +12,7 @@ import (
 	"github.com/gorilla/websocket"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	. "github.com/rancher-sandbox/go-tpm"
+	. "github.com/kairos-io/go-tpm"
 )
 
 func writeRead(conn *websocket.Conn, input []byte) ([]byte, error) {
