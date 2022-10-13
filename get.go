@@ -14,7 +14,6 @@ import (
 	"github.com/google/go-attestation/attest"
 	"github.com/gorilla/websocket"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 )
 
 // GetAuthToken generates an authentication token from the host TPM.
@@ -98,10 +97,10 @@ func Get(url string, opts ...Option) ([]byte, error) {
 		return nil, err
 	}
 
-	hash, err := GetPubHash(opts...)
-	if err != nil {
-		return nil, err
-	}
+	// hash, err := GetPubHash(opts...)
+	// if err != nil {
+	// 	return nil, err
+	// }
 
 	token, err := getToken(attestationData)
 	if err != nil {
@@ -114,7 +113,7 @@ func Get(url string, opts ...Option) ([]byte, error) {
 	}
 
 	wsURL := strings.Replace(url, "http", "ws", 1)
-	logrus.Infof("Using TPMHash %s to dial %s", hash, wsURL)
+	//logrus.Infof("Using TPMHash %s to dial %s", hash, wsURL)
 	conn, resp, err := dialer.Dial(wsURL, header)
 	if err != nil {
 		if resp != nil {
