@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	. "github.com/kairos-io/tpm-helpers"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	. "github.com/kairos-io/go-tpm"
 )
 
 func writeRead(conn *websocket.Conn, input []byte) ([]byte, error) {

@@ -9,11 +9,10 @@ import (
 	"fmt"
 	"strings"
 
-
 	"github.com/google/go-attestation/attest"
 	"github.com/google/go-tpm-tools/simulator"
+	"github.com/kairos-io/tpm-helpers/backend"
 	"github.com/pkg/errors"
-	"github.com/kairos-io/go-tpm/backend"
 )
 
 // GenerateChallenge generates a challenge from attestation data and a public endorsed key

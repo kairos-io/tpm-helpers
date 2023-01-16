@@ -1,4 +1,4 @@
-module github.com/kairos-io/go-tpm
+module github.com/kairos-io/tpm-helpers
 
 go 1.19
 

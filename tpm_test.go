@@ -3,10 +3,10 @@ package tpm_test
 import (
 	"os"
 
+	. "github.com/kairos-io/tpm-helpers"
+	. "github.com/kairos-io/tpm-helpers/backend"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	. "github.com/kairos-io/go-tpm"
-	. "github.com/kairos-io/go-tpm/backend"
 )
 
 var _ = Describe("Simulated TPM", func() {
