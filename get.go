@@ -60,9 +60,67 @@ func Authenticate(akBytes []byte, channel io.ReadWriter, opts ...Option) error {
 	return nil
 }
 
+func AuthRequest(r *http.Request, conn *websocket.Conn) error {
+	token := r.Header.Get("Authorization")
+	ek, at, err := GetAttestationData(token)
+	if err != nil {
+		return err
+	}
+	secret, challenge, err := GenerateChallenge(ek, at)
+	if err != nil {
+		return err
+	}
+
+	resp, err := writeRead(conn, challenge)
+	if err != nil {
+		return err
+	}
+
+	if err := ValidateChallenge(secret, resp); err != nil {
+		return fmt.Errorf("error validating challenge: %w", err)
+	}
+
+	return nil
+}
+
+func writeRead(conn *websocket.Conn, input []byte) ([]byte, error) {
+	writer, err := conn.NextWriter(websocket.BinaryMessage)
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := writer.Write(input); err != nil {
+		return nil, err
+	}
+	writer.Close()
+	_, reader, err := conn.NextReader()
+	if err != nil {
+		return nil, err
+	}
+
+	return ioutil.ReadAll(reader)
+}
+
 // Get retrieves a message from a remote ws server after
 // a successfully process of the TPM challenge
 func Get(url string, opts ...Option) ([]byte, error) {
+	conn, err := Connection(url, opts...)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	_, msg, err := conn.NextReader()
+	if err != nil {
+		return nil, fmt.Errorf("reading payload from tpm get: %w", err)
+	}
+
+	return ioutil.ReadAll(msg)
+}
+
+// Connection returns a connection to the endpoint which suathenticated already.
+// The server side needs to call AuthRequest on the http request in order to authenticate and refuse connections
+func Connection(url string, opts ...Option) (*websocket.Conn, error) {
 	c := newConfig()
 	c.apply(opts...)
 
@@ -128,7 +186,6 @@ func Get(url string, opts ...Option) ([]byte, error) {
 		}
 		return nil, err
 	}
-	defer conn.Close()
 
 	_, msg, err := conn.NextReader()
 	if err != nil {
@@ -149,22 +206,14 @@ func Get(url string, opts ...Option) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer writer.Close()
 
 	if err := json.NewEncoder(writer).Encode(challengeResp); err != nil {
 		return nil, fmt.Errorf("encoding ChallengeResponse: %w", err)
 	}
 
-	if err := writer.Close(); err != nil {
-		return nil, fmt.Errorf("closing websocket writer: %w", err)
-	}
+	writer.Close()
 
-	_, msg, err = conn.NextReader()
-	if err != nil {
-		return nil, fmt.Errorf("reading payload from tpm get: %w", err)
-	}
-
-	return ioutil.ReadAll(msg)
+	return conn, nil
 }
 
 func getChallengeResponse(c *config, ec *attest.EncryptedCredential, aikBytes []byte) (*ChallengeResponse, error) {
