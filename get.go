@@ -77,7 +77,7 @@ func AuthRequest(r *http.Request, conn *websocket.Conn) error {
 	}
 
 	if err := ValidateChallenge(secret, resp); err != nil {
-		return fmt.Errorf("error validating challenge: %w", err)
+		return fmt.Errorf("error validating challenge: %w (response: %s)", err, string(resp))
 	}
 
 	return nil
