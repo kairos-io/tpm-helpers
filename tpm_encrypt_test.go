@@ -9,14 +9,14 @@ import (
 var _ = Describe("TPM Encryption", func() {
 	Context("Blob", func() {
 		It("encrypts a blob", func() {
-			var encodedBlob []byte
+			var encryptedBlob []byte
 			var err error
-			By("Encoding the blob", func() {
-				encodedBlob, err = EncodeBlob([]byte("foo"), EmulatedTPM)
+			By("Encrypting the blob", func() {
+				encryptedBlob, err = EncryptBlob([]byte("foo"), EmulatedTPM)
 				Expect(err).ToNot(HaveOccurred())
 			})
-			By("Decoding the blob", func() {
-				foo, err := DecodeBlob(encodedBlob, EmulatedTPM)
+			By("Decrypting the blob", func() {
+				foo, err := DecryptBlob(encryptedBlob, EmulatedTPM)
 				Expect(err).ToNot(HaveOccurred())
 				Expect(foo).To(Equal([]byte("foo")))
 			})

@@ -12,8 +12,8 @@ import (
 	"github.com/pkg/errors"
 )
 
-// DecodeBlob decodes a blob using a key stored in the TPM
-func DecodeBlob(blob []byte, opts ...TPMOption) ([]byte, error) {
+// DecryptBlob decrypts a blob using a key stored in the TPM
+func DecryptBlob(blob []byte, opts ...TPMOption) ([]byte, error) {
 	o, err := DefaultTPMOption(opts...)
 	if err != nil {
 		return []byte{}, err
@@ -35,7 +35,7 @@ func DecodeBlob(blob []byte, opts ...TPMOption) ([]byte, error) {
 	return private.Decrypt(rand.Reader, blob, &rsa.OAEPOptions{Hash: o.hash})
 }
 
-func EncodeBlob(blob []byte, opts ...TPMOption) ([]byte, error) {
+func EncryptBlob(blob []byte, opts ...TPMOption) ([]byte, error) {
 	o, err := DefaultTPMOption(opts...)
 	if err != nil {
 		return []byte{}, err
