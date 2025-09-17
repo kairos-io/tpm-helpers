@@ -17,10 +17,16 @@ import (
 
 // GenerateChallenge generates a challenge from attestation data and a public endorsed key
 func GenerateChallenge(ek *attest.EK, attestationData *AttestationData) ([]byte, []byte, error) {
+	// Parse raw AK bytes into AttestationParameters
+	akParams, err := ParseAKBytes(attestationData.AK)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parsing AK bytes: %w", err)
+	}
+
 	ap := attest.ActivationParameters{
 		TPMVersion: attest.TPMVersion20,
 		EK:         ek.Public,
-		AK:         *attestationData.AK,
+		AK:         *akParams,
 	}
 
 	secret, ec, err := ap.Generate()
@@ -143,7 +149,9 @@ func getAttestationData(c *config) (*AttestationData, []byte, error) {
 	}
 	defer ak.Close(tpm) //nolint:errcheck // Cleanup operation
 
+	// Get AK public key bytes
 	params := ak.AttestationParameters()
+	akPublicBytes := params.Public
 
 	if len(eks) == 0 {
 		return nil, nil, fmt.Errorf("failed to find EK")
@@ -162,7 +170,7 @@ func getAttestationData(c *config) (*AttestationData, []byte, error) {
 
 	return &AttestationData{
 		EK: ekBytes,
-		AK: &params,
+		AK: akPublicBytes, // Use raw public key bytes
 	}, aikBytes, nil
 }
 

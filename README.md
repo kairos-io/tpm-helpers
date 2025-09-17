@@ -121,9 +121,9 @@ func RequestDecryptionPassphrase() ([]byte, error) {
 #### ChallengeRequest
 ```go
 type ChallengeRequest struct {
-    EK   []byte                        // Endorsement Key (TPM identity)
-    AK   *attest.AttestationParameters // Attestation Key (for signing)  
-    PCRs *PCRValues                    // Current PCR measurements
+    EK   []byte     // Endorsement Key (TPM identity)
+    AK   []byte     // Raw AK public key bytes (for signing)  
+    PCRs *PCRValues // Current PCR measurements
 }
 ```
 
@@ -188,7 +188,7 @@ func handleChallengeRequest(req *ChallengeRequest) (*AttestationChallengeRespons
     tpmHash := hashEK(req.EK) // Your TPM identification logic
     if isFirstTime(tpmHash) {
         // Enrollment: store TPM identity and PCR values
-        err = storeTMPIdentity(tmpHash, req.AK, req.PCRs)
+        err = storeTPMIdentity(tpmHash, req.AK, req.PCRs)
         if err != nil {
             return nil, err
         }

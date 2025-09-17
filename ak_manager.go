@@ -349,17 +349,12 @@ func (m *AKManager) GetChallengeRequest() (*ChallengeRequest, error) {
 		return nil, fmt.Errorf("encoding EK: %w", err)
 	}
 
-	// Get AK attestation parameters from our persisted AK
+	// Get AK public key bytes from our persisted AK
 	akInfo, err := m.LoadAK()
 	if err != nil {
 		return nil, fmt.Errorf("loading AK: %w", err)
 	}
 	defer m.CloseAK(akInfo.Handle) //nolint:errcheck
-
-	// Create attestation parameters from our loaded AK
-	attestParams := &attest.AttestationParameters{
-		Public: akInfo.PublicKeyBytes,
-	}
 
 	// Read current PCR values for enrollment/verification
 	pcrValues, err := m.readPCRValues()
@@ -368,9 +363,9 @@ func (m *AKManager) GetChallengeRequest() (*ChallengeRequest, error) {
 	}
 
 	return &ChallengeRequest{
-		EK:   ekBytes,      // Needed for challenge encryption
-		AK:   attestParams, // Needed for challenge binding
-		PCRs: pcrValues,    // Needed for enrollment/verification (but not challenge generation)
+		EK:   ekBytes,                // Needed for challenge encryption
+		AK:   akInfo.PublicKeyBytes,  // Raw AK public key bytes for challenge binding
+		PCRs: pcrValues,              // Needed for enrollment/verification (but not challenge generation)
 	}, nil
 }
 
