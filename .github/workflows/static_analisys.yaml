@@ -18,12 +18,12 @@ jobs:
         sudo apt-get install libtspi-dev
         go install golang.org/x/tools/cmd/goimports@latest
         go install github.com/fzipp/gocyclo/cmd/gocyclo@latest
-        go install honnef.co/go/tools/cmd/staticcheck@v0.2.0
+        go install honnef.co/go/tools/cmd/staticcheck@latest
 
     - name: golangci-lint
-      uses: golangci/golangci-lint-action@v6
+      uses: golangci/golangci-lint-action@v7
       with:
-        version: latest
+        version: v2.4.0
         args: --build-tags ci
 
     - name: Vet
@@ -36,4 +36,4 @@ jobs:
       run: gocyclo -over 30 .
 
     - name: Staticcheck
-      run: staticcheck -go 1.12 ./...
+      run: staticcheck ./...
