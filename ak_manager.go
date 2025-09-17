@@ -367,7 +367,7 @@ func (m *AKManager) GetChallengeRequest() (*ChallengeRequest, error) {
 }
 
 // CreateProofRequest creates a proof request with the activated credential secret and nonce-based quote
-func (m *AKManager) CreateProofRequest(challengeResp *ChallengeResponse) (*ProofRequest, error) {
+func (m *AKManager) CreateProofRequest(challengeResp *AttestationChallengeResponse) (*ProofRequest, error) {
 	// Activate the credential to get the secret
 	challenge := &Challenge{EC: challengeResp.Challenge}
 	secret, err := m.ActivateCredential(challenge)

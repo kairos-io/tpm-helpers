@@ -50,8 +50,13 @@ type ChallengeRequest struct {
 	PCRs *PCRValues                    `json:"pcrs"` // Current PCR measurements - needed for enrollment/verification
 }
 
-// ChallengeResponse represents the server's response containing challenge and nonce
+// ChallengeResponse represents the client's response to a challenge (LEGACY - maintains compatibility)
 type ChallengeResponse struct {
+	Secret []byte `json:"secret"` // Secret recovered from credential activation
+}
+
+// AttestationChallengeResponse represents the server's response containing challenge and nonce
+type AttestationChallengeResponse struct {
 	Challenge *attest.EncryptedCredential `json:"challenge"` // Credential activation challenge
 	Nonce     []byte                      `json:"nonce"`     // Server-generated nonce for next request
 	Enrolled  bool                        `json:"enrolled"`  // True if this was a new enrollment

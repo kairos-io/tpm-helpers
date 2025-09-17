@@ -127,9 +127,9 @@ type ChallengeRequest struct {
 }
 ```
 
-#### ChallengeResponse  
+#### AttestationChallengeResponse  
 ```go
-type ChallengeResponse struct {
+type AttestationChallengeResponse struct {
     Challenge *attest.EncryptedCredential // Credential activation challenge
     Nonce     []byte                      // Server-generated nonce
     Enrolled  bool                        // True if this was first-time enrollment
@@ -177,7 +177,7 @@ func ValidateChallenge(secret, resp []byte) error
 
 ```go
 // Handle ChallengeRequest
-func handleChallengeRequest(req *ChallengeRequest) (*ChallengeResponse, error) {
+func handleChallengeRequest(req *ChallengeRequest) (*AttestationChallengeResponse, error) {
     // 1. Decode EK from request
     ek, err := tpm.DecodeEK(req.EK)
     if err != nil {
@@ -223,7 +223,7 @@ func handleChallengeRequest(req *ChallengeRequest) (*ChallengeResponse, error) {
     var challenge Challenge
     json.Unmarshal(challengeBytes, &challenge)
     
-    return &ChallengeResponse{
+    return &AttestationChallengeResponse{
         Challenge: challenge.EC,
         Nonce:     nonce,
         Enrolled:  enrolled,
