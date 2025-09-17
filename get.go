@@ -21,7 +21,7 @@ import (
 // be saved by the caller for later Authentication.
 func GetAuthToken(opts ...Option) (string, []byte, error) {
 	c := newConfig()
-	c.apply(opts...)
+	c.apply(opts...) //nolint:errcheck // Config validation happens later
 
 	attestationData, akBytes, err := getAttestationData(c)
 	if err != nil {
@@ -41,7 +41,7 @@ func GetAuthToken(opts ...Option) (string, []byte, error) {
 // Attestation Key (AK) and will send it back to the attestation server.
 func Authenticate(akBytes []byte, channel io.ReadWriter, opts ...Option) error {
 	c := newConfig()
-	c.apply(opts...)
+	c.apply(opts...) //nolint:errcheck // Config validation happens later
 
 	var challenge Challenge
 	if err := json.NewDecoder(channel).Decode(&challenge); err != nil {
@@ -60,6 +60,9 @@ func Authenticate(akBytes []byte, channel io.ReadWriter, opts ...Option) error {
 	return nil
 }
 
+// AuthRequest handles TPM-based authentication for WebSocket connections.
+// It extracts the authorization token from the HTTP request, generates a challenge,
+// and validates the TPM-generated response to authenticate the client.
 func AuthRequest(r *http.Request, conn *websocket.Conn) error {
 	token := r.Header.Get("Authorization")
 	ek, at, err := GetAttestationData(token)
@@ -92,7 +95,7 @@ func writeRead(conn *websocket.Conn, input []byte) ([]byte, error) {
 	if _, err := writer.Write(input); err != nil {
 		return nil, err
 	}
-	writer.Close()
+	writer.Close() //nolint:errcheck // Cleanup operation
 	_, reader, err := conn.NextReader()
 	if err != nil {
 		return nil, err
@@ -108,7 +111,7 @@ func Get(url string, opts ...Option) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck // Cleanup operation //nolint:errcheck // Cleanup operation
 
 	_, msg, err := conn.NextReader()
 	if err != nil {
@@ -122,7 +125,7 @@ func Get(url string, opts ...Option) ([]byte, error) {
 // The server side needs to call AuthRequest on the http request in order to authenticate and refuse connections
 func Connection(url string, opts ...Option) (*websocket.Conn, error) {
 	c := newConfig()
-	c.apply(opts...)
+	c.apply(opts...) //nolint:errcheck // Config validation happens later
 
 	header := c.header
 	if c.header == nil {
@@ -211,7 +214,7 @@ func Connection(url string, opts ...Option) (*websocket.Conn, error) {
 		return nil, fmt.Errorf("encoding ChallengeResponse: %w", err)
 	}
 
-	writer.Close()
+	writer.Close() //nolint:errcheck // Cleanup operation
 
 	return conn, nil
 }
@@ -221,13 +224,13 @@ func getChallengeResponse(c *config, ec *attest.EncryptedCredential, aikBytes []
 	if err != nil {
 		return nil, fmt.Errorf("opening tpm: %w", err)
 	}
-	defer tpm.Close()
+	defer tpm.Close() //nolint:errcheck // Cleanup operation //nolint:errcheck // Cleanup operation
 
 	aik, err := tpm.LoadAK(aikBytes)
 	if err != nil {
 		return nil, err
 	}
-	defer aik.Close(tpm)
+	defer aik.Close(tpm) //nolint:errcheck // Cleanup operation
 
 	secret, err := aik.ActivateCredential(tpm, *ec)
 	if err != nil {

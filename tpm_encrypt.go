@@ -25,7 +25,7 @@ func DecryptBlob(blob []byte, opts ...TPMOption) ([]byte, error) {
 		return []byte{}, err
 	}
 	if !o.emulated {
-		defer dev.Close()
+		defer dev.Close() //nolint:errcheck // Cleanup operation //nolint:errcheck // Cleanup operation
 	}
 
 	private, err := tpmk.NewRSAPrivateKey(dev, o.index, o.password)
@@ -35,6 +35,8 @@ func DecryptBlob(blob []byte, opts ...TPMOption) ([]byte, error) {
 	return private.Decrypt(rand.Reader, blob, &rsa.OAEPOptions{Hash: o.hash})
 }
 
+// EncryptBlob encrypts data using a key stored in the TPM.
+// It generates or reuses an RSA key in the TPM and encrypts the blob using OAEP padding.
 func EncryptBlob(blob []byte, opts ...TPMOption) ([]byte, error) {
 	o, err := DefaultTPMOption(opts...)
 	if err != nil {
@@ -47,7 +49,7 @@ func EncryptBlob(blob []byte, opts ...TPMOption) ([]byte, error) {
 		return []byte{}, err
 	}
 	if !o.emulated {
-		defer dev.Close()
+		defer dev.Close() //nolint:errcheck // Cleanup operation //nolint:errcheck // Cleanup operation
 	}
 
 	// Get a list of keys

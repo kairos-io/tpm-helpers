@@ -1,0 +1,40 @@
+version: 2
+
+run:
+  build-tags:
+    - ci
+
+linters:
+  enable:
+    - revive
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - errcheck
+
+linters-settings:
+  revive:
+    # see https://github.com/mgechev/revive#available-rules for details.
+    ignore-generated-header: true
+    severity: warning
+    rules:
+      - name: exported
+        severity: warning
+        disabled: false
+        arguments:
+          - "checkPrivateReceivers"
+          - "sayRepetitiveInsteadOfStutters"
+
+issues:
+  exclude-use-default: false
+  exclude-rules:
+    # Exclude some linters from running on tests files.
+    - path: _test\.go
+      linters:
+        - revive
+    # Exclude dot imports in test files (common Go testing pattern)
+    - path: _test\.go
+      text: "should not use dot imports"
+      linters:
+        - revive

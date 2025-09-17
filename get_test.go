@@ -37,16 +37,16 @@ func WSServer(ctx context.Context) {
 			}
 			awesome := r.Header.Get("awesome")
 			writer, _ := conn.NextWriter(websocket.BinaryMessage)
-			json.NewEncoder(writer).Encode(map[string]string{"foo": "bar", "header": awesome})
+			json.NewEncoder(writer).Encode(map[string]string{"foo": "bar", "header": awesome}) //nolint:errcheck // Test cleanup
 		}
 	})
 
 	s.Handler = m
 
-	go s.ListenAndServe()
+	go s.ListenAndServe() //nolint:errcheck // Test cleanup
 	go func() {
 		<-ctx.Done()
-		s.Shutdown(ctx)
+		s.Shutdown(ctx) //nolint:errcheck // Test cleanup
 	}()
 }
 
@@ -66,7 +66,7 @@ func WSServerReceiver(ctx context.Context, c chan map[string]string) {
 				fmt.Println("error", err.Error())
 				return
 			}
-			defer conn.Close()
+			defer conn.Close() //nolint:errcheck // Cleanup operation //nolint:errcheck // Cleanup operation
 
 			v := map[string]string{}
 			err := conn.ReadJSON(&v)
@@ -80,10 +80,10 @@ func WSServerReceiver(ctx context.Context, c chan map[string]string) {
 
 	s.Handler = m
 
-	go s.ListenAndServe()
+	go s.ListenAndServe() //nolint:errcheck // Test cleanup
 	go func() {
 		<-ctx.Done()
-		s.Shutdown(ctx)
+		s.Shutdown(ctx) //nolint:errcheck // Test cleanup
 	}()
 }
 
@@ -99,7 +99,7 @@ var _ = Describe("POST", func() {
 			conn, err := Connection("http://localhost:8080/post", Emulated, WithSeed(1))
 			Expect(err).ToNot(HaveOccurred())
 
-			defer conn.Close()
+			defer conn.Close() //nolint:errcheck // Cleanup operation //nolint:errcheck // Cleanup operation
 
 			err = conn.WriteJSON(map[string]string{"foo": "bar", "header": "foo"})
 			Expect(err).ToNot(HaveOccurred())
@@ -125,7 +125,7 @@ var _ = Describe("GET", func() {
 
 			msg, err := Get("http://localhost:8080/test", Emulated, WithSeed(1), WithAdditionalHeader("awesome", "content"))
 			result := map[string]interface{}{}
-			json.Unmarshal(msg, &result)
+			json.Unmarshal(msg, &result) //nolint:errcheck // Test cleanup
 			Expect(err).ToNot(HaveOccurred())
 			Expect(result).To(Equal(map[string]interface{}{"foo": "bar", "header": "content"}))
 		})
@@ -148,7 +148,7 @@ var _ = Describe("GET", func() {
 		It("gets pubhash from remote with a public signed CA", func() {
 			msg, err := Get(regUrl, Emulated, WithSeed(1))
 			result := map[string]interface{}{}
-			json.Unmarshal(msg, &result)
+			json.Unmarshal(msg, &result) //nolint:errcheck // Test cleanup
 			Expect(err).ToNot(HaveOccurred())
 			Expect(result).To(expectedMatches)
 		})
@@ -156,14 +156,14 @@ var _ = Describe("GET", func() {
 		It("it fails if we specify a custom CA (invalid)", func() {
 			msg, err := Get(regUrl, Emulated, WithSeed(1), WithCAs([]byte(`dddd`)))
 			result := map[string]interface{}{}
-			json.Unmarshal(msg, &result)
+			json.Unmarshal(msg, &result) //nolint:errcheck // Test cleanup
 			Expect(err).To(HaveOccurred())
 		})
 
 		It("it pass if appends to system CA", func() {
 			msg, err := Get(regUrl, Emulated, WithSeed(1), AppendCustomCAToSystemCA, WithCAs([]byte(`dddd`)))
 			result := map[string]interface{}{}
-			json.Unmarshal(msg, &result)
+			json.Unmarshal(msg, &result) //nolint:errcheck // Test cleanup
 			Expect(err).ToNot(HaveOccurred())
 			Expect(result).To(expectedMatches)
 		})

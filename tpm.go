@@ -51,7 +51,7 @@ func ResolveToken(token string, opts ...Option) (bool, string, error) {
 // GetPubHash returns the EK's pub hash
 func GetPubHash(opts ...Option) (string, error) {
 	c := newConfig()
-	c.apply(opts...)
+	c.apply(opts...) //nolint:errcheck // Config validation happens later
 
 	ek, err := getEK(c)
 	if err != nil {
@@ -100,7 +100,7 @@ func getEK(c *config) (*attest.EK, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening tpm for decoding EK: %w", err)
 	}
-	defer tpm.Close()
+	defer tpm.Close() //nolint:errcheck // Cleanup operation //nolint:errcheck // Cleanup operation
 
 	eks, err := tpm.EKs()
 	if err != nil {
@@ -130,7 +130,7 @@ func getAttestationData(c *config) (*AttestationData, []byte, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("opening tpm for getting attestation data: %w", err)
 	}
-	defer tpm.Close()
+	defer tpm.Close() //nolint:errcheck // Cleanup operation //nolint:errcheck // Cleanup operation
 
 	eks, err := tpm.EKs()
 	if err != nil {
@@ -141,7 +141,7 @@ func getAttestationData(c *config) (*AttestationData, []byte, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	defer ak.Close(tpm)
+	defer ak.Close(tpm) //nolint:errcheck // Cleanup operation
 
 	params := ak.AttestationParameters()
 

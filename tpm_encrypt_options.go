@@ -13,6 +13,10 @@ import (
 	"github.com/google/go-tpm/tpmutil"
 )
 
+// TPMOptions contains configuration options for TPM operations including device path,
+// key indices, attributes, passwords, and hash algorithms.
+//
+//nolint:revive // Allow stuttering for backwards compatibility
 type TPMOptions struct {
 	device   string
 	index    tpmutil.Handle
@@ -26,7 +30,12 @@ type TPMOptions struct {
 
 var emulatedDevice io.ReadWriteCloser
 
-func CloseEmulatedDevice() { emulatedDevice.Close(); emulatedDevice = nil }
+// CloseEmulatedDevice closes the global emulated TPM device and resets it to nil.
+// This is used for cleanup when using the TPM simulator.
+func CloseEmulatedDevice() {
+	emulatedDevice.Close() //nolint:errcheck // Cleanup operation
+	emulatedDevice = nil
+}
 
 func getTPMDevice(o *TPMOptions) (io.ReadWriteCloser, error) {
 	if o.emulated {
@@ -46,6 +55,8 @@ func getTPMDevice(o *TPMOptions) (io.ReadWriteCloser, error) {
 	return dev, err
 }
 
+// DefaultTPMOption creates a new TPMOptions struct with sensible defaults
+// and applies any provided options on top of the defaults.
 func DefaultTPMOption(opts ...TPMOption) (*TPMOptions, error) {
 	o := &TPMOptions{}
 
@@ -60,8 +71,13 @@ func DefaultTPMOption(opts ...TPMOption) (*TPMOptions, error) {
 	return o, o.Apply(append(defaults, opts...)...)
 }
 
+// TPMOption is a functional option type for configuring TPMOptions.
+//
+//nolint:revive // Allow stuttering for backwards compatibility
 type TPMOption func(t *TPMOptions) error
 
+// Apply applies a list of TPMOption functions to the TPMOptions struct,
+// returning an error if any option fails to apply.
 func (t *TPMOptions) Apply(opts ...TPMOption) error {
 	for _, o := range opts {
 		if err := o(t); err != nil {
@@ -72,11 +88,14 @@ func (t *TPMOptions) Apply(opts ...TPMOption) error {
 	return nil
 }
 
+// EmulatedTPM is a TPMOption that configures the TPM to use an emulated device
+// instead of a physical TPM hardware device.
 var EmulatedTPM TPMOption = func(t *TPMOptions) error {
 	t.emulated = true
 	return nil
 }
 
+// WithHash returns a TPMOption that sets the hash algorithm to use for cryptographic operations.
 func WithHash(c crypto.Hash) TPMOption {
 	return func(t *TPMOptions) (err error) {
 		t.hash = c
@@ -84,6 +103,7 @@ func WithHash(c crypto.Hash) TPMOption {
 	}
 }
 
+// WithPassword returns a TPMOption that sets the password for TPM key operations.
 func WithPassword(s string) TPMOption {
 	return func(t *TPMOptions) error {
 		t.password = s
@@ -91,6 +111,7 @@ func WithPassword(s string) TPMOption {
 	}
 }
 
+// WithDevice returns a TPMOption that sets the TPM device path (e.g., "/dev/tpmrm0").
 func WithDevice(s string) TPMOption {
 	return func(t *TPMOptions) (err error) {
 		t.device = s
@@ -98,6 +119,8 @@ func WithDevice(s string) TPMOption {
 	}
 }
 
+// WithAttributes returns a TPMOption that sets the key attributes from a pipe-separated string
+// (e.g., "sign|decrypt|userwithauth|sensitivedataorigin").
 func WithAttributes(s string) TPMOption {
 	return func(t *TPMOptions) (err error) {
 		t.keyAttr, err = parseKeyAttributes(s)
@@ -105,6 +128,8 @@ func WithAttributes(s string) TPMOption {
 	}
 }
 
+// WithIndex returns a TPMOption that sets the TPM handle index from a string
+// (e.g., "0x81000008" for a persistent key handle).
 func WithIndex(s string) TPMOption {
 	return func(t *TPMOptions) (err error) {
 		t.index, err = parseHandle(s)
@@ -112,6 +137,8 @@ func WithIndex(s string) TPMOption {
 	}
 }
 
+// WithNVAttributes returns a TPMOption that sets the NV (Non-Volatile) storage attributes
+// from a pipe-separated string (e.g., "ownerwrite|ownerread|authread|ppread").
 func WithNVAttributes(s string) TPMOption {
 	return func(t *TPMOptions) (err error) {
 		t.nvAttr, err = parseNVAttributes(s)
