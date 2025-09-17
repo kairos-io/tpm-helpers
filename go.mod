@@ -1,6 +1,8 @@
 module github.com/kairos-io/tpm-helpers
 
-go 1.19
+go 1.23.0
+
+toolchain go1.24
 
 require (
 	github.com/folbricht/tpmk v0.1.2-0.20230104073416-f20b20c289d7
