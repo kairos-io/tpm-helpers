@@ -15,6 +15,21 @@ import (
 	"github.com/kairos-io/tpm-helpers/backend"
 )
 
+// DefaultEKAuthPolicy is the standard TPM 2.0 Endorsement Key authorization policy
+// as defined in the TCG EK Credential Profile specification (Table B.3.3).
+// This policy allows the EK to be used for key activation and attestation
+// without requiring additional authorization.
+//
+// References:
+// - TCG EK Credential Profile: https://trustedcomputinggroup.org/wp-content/uploads/TCG-EK-Credential-Profile-for-TPM-Family-2.0-Level-0-Version-2.6_pub.pdf
+// - tpm2-tools implementation: https://github.com/tpm2-software/tpm2-tools/blob/c2d1ee7c60dbcc24c4251eb1a99138d2d29fad73/tools/tpm2_createek.c#L34-L42
+var DefaultEKAuthPolicy = []byte{
+	0x83, 0x71, 0x97, 0x67, 0x44, 0x84, 0xB3, 0xF8,
+	0x1A, 0x90, 0xCC, 0x8D, 0x46, 0xA5, 0xD7, 0x24,
+	0xFD, 0x52, 0xD7, 0x6E, 0x06, 0x52, 0x0B, 0x64,
+	0xF2, 0xA1, 0xDA, 0x1B, 0x33, 0x14, 0x69, 0xAA,
+}
+
 // AKBlob represents the TPM-encrypted AK blob stored on disk
 type AKBlob struct {
 	Private []byte `json:"private"` // TPM-encrypted private key blob
@@ -396,12 +411,7 @@ func (m *AKManager) loadEKHandle(rwc io.ReadWriteCloser) (tpmutil.Handle, error)
 		Attributes: tpm2.FlagFixedTPM | tpm2.FlagFixedParent |
 			tpm2.FlagSensitiveDataOrigin | tpm2.FlagAdminWithPolicy |
 			tpm2.FlagRestricted | tpm2.FlagDecrypt,
-		AuthPolicy: []byte{
-			0x83, 0x71, 0x97, 0x67, 0x44, 0x84, 0xB3, 0xF8,
-			0x1A, 0x90, 0xCC, 0x8D, 0x46, 0xA5, 0xD7, 0x24,
-			0xFD, 0x52, 0xD7, 0x6E, 0x06, 0x52, 0x0B, 0x64,
-			0xF2, 0xA1, 0xDA, 0x1B, 0x33, 0x14, 0x69, 0xAA,
-		},
+		AuthPolicy: DefaultEKAuthPolicy,
 		RSAParameters: &tpm2.RSAParams{
 			KeyBits: 2048,
 		},
