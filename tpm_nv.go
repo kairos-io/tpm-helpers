@@ -13,7 +13,7 @@ func StoreBlob(blob []byte, opts ...TPMOption) error {
 	}
 
 	// Open device or simulator
-	dev, err := GetTPMDevice(o)
+	dev, err := getTPMDevice(o)
 	if err != nil {
 		return err
 	}
@@ -34,7 +34,7 @@ func ReadBlob(opts ...TPMOption) ([]byte, error) {
 	}
 
 	// Open device or simulator
-	dev, err := GetTPMDevice(o)
+	dev, err := getTPMDevice(o)
 	if err != nil {
 		return []byte{}, err
 	}

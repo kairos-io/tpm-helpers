@@ -37,7 +37,7 @@ func CloseEmulatedDevice() {
 	emulatedDevice = nil
 }
 
-func GetTPMDevice(o *TPMOptions) (io.ReadWriteCloser, error) {
+func getTPMDevice(o *TPMOptions) (io.ReadWriteCloser, error) {
 	if o.emulated {
 		if emulatedDevice == nil {
 			var err error

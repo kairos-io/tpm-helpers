@@ -20,7 +20,7 @@ func DecryptBlob(blob []byte, opts ...TPMOption) ([]byte, error) {
 	}
 
 	// Open device or simulator
-	dev, err := GetTPMDevice(o)
+	dev, err := getTPMDevice(o)
 	if err != nil {
 		return []byte{}, err
 	}
@@ -44,7 +44,7 @@ func EncryptBlob(blob []byte, opts ...TPMOption) ([]byte, error) {
 	}
 
 	// Open device or simulator
-	dev, err := GetTPMDevice(o)
+	dev, err := getTPMDevice(o)
 	if err != nil {
 		return []byte{}, err
 	}
