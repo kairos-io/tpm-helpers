@@ -326,9 +326,9 @@ func (m *AKManager) CloseAK(handle tpmutil.Handle) error {
 	return tpm2.FlushContext(rwc, handle)
 }
 
-// GetEnrollmentPayload returns AttestationData for server enrollment
-// Returns AttestationData that can be used with existing GenerateChallenge flow
-func (m *AKManager) GetEnrollmentPayload() (*AttestationData, error) {
+// GetChallengeRequest creates the initial challenge request to KMS
+// This works for both first-time enrollment and subsequent verification
+func (m *AKManager) GetChallengeRequest() (*ChallengeRequest, error) {
 	// Get EK using existing function
 	ek, err := getEK(m.config)
 	if err != nil {
@@ -349,16 +349,48 @@ func (m *AKManager) GetEnrollmentPayload() (*AttestationData, error) {
 	defer m.CloseAK(akInfo.Handle)
 
 	// Create attestation parameters from our loaded AK
-	// Note: We need to convert from our AKInfo to attest.AttestationParameters
 	attestParams := &attest.AttestationParameters{
 		Public: akInfo.PublicKeyBytes,
-		// Additional fields may be needed based on attest.AttestationParameters struct
 	}
 
-	return &AttestationData{
-		EK: ekBytes,
-		AK: attestParams,
+	// Read current PCR values for enrollment/verification
+	pcrValues, err := m.readPCRValues()
+	if err != nil {
+		return nil, fmt.Errorf("reading PCR values: %w", err)
+	}
+
+	return &ChallengeRequest{
+		EK:   ekBytes,      // Needed for challenge encryption
+		AK:   attestParams, // Needed for challenge binding
+		PCRs: pcrValues,    // Needed for enrollment/verification (but not challenge generation)
 	}, nil
+}
+
+// CreateProofRequest creates a proof request with the activated credential secret and nonce-based quote
+func (m *AKManager) CreateProofRequest(challengeResp *ChallengeResponse) (*ProofRequest, error) {
+	// Activate the credential to get the secret
+	challenge := &Challenge{EC: challengeResp.Challenge}
+	secret, err := m.ActivateCredential(challenge)
+	if err != nil {
+		return nil, fmt.Errorf("activating credential: %w", err)
+	}
+
+	// Generate a fresh PCR quote with the server's nonce for cryptographic freshness proof
+	quote, err := m.generatePCRQuote(challengeResp.Nonce)
+	if err != nil {
+		return nil, fmt.Errorf("generating nonce-based quote: %w", err)
+	}
+
+	return &ProofRequest{
+		Secret:   secret,
+		Nonce:    challengeResp.Nonce, // Include server's nonce for anti-replay
+		PCRQuote: quote,               // Cryptographic proof that includes the nonce
+	}, nil
+}
+
+// Challenge represents a simple credential activation challenge
+type Challenge struct {
+	EC *attest.EncryptedCredential
 }
 
 // ActivateCredential decrypts a credential blob using the loaded AK and EK
@@ -424,6 +456,93 @@ func (m *AKManager) loadEKHandle(rwc io.ReadWriteCloser) (tpmutil.Handle, error)
 	}
 
 	return ekHandle, nil
+}
+
+// readPCRValues reads PCR values 0, 7, and 11 from the TPM
+func (m *AKManager) readPCRValues() (*PCRValues, error) {
+	rwc, err := getRawTPM(m.config)
+	if err != nil {
+		return nil, fmt.Errorf("opening TPM: %w", err)
+	}
+	defer rwc.Close()
+
+	// Read PCRs using ReadPCRs function which can read multiple PCRs at once
+	pcrValues, err := tpm2.ReadPCRs(rwc, tpm2.PCRSelection{
+		Hash: tpm2.AlgSHA256,
+		PCRs: []int{0, 7, 11},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("reading PCRs: %w", err)
+	}
+
+	// Extract individual PCR values
+	pcr0, ok := pcrValues[0]
+	if !ok {
+		return nil, fmt.Errorf("PCR 0 not found in response")
+	}
+
+	pcr7, ok := pcrValues[7]
+	if !ok {
+		return nil, fmt.Errorf("PCR 7 not found in response")
+	}
+
+	pcr11, ok := pcrValues[11]
+	if !ok {
+		return nil, fmt.Errorf("PCR 11 not found in response")
+	}
+
+	return &PCRValues{
+		PCR0:  pcr0,
+		PCR7:  pcr7,
+		PCR11: pcr11,
+	}, nil
+}
+
+// generatePCRQuote generates a TPM quote (signed attestation) of PCR values using the AK
+func (m *AKManager) generatePCRQuote(nonce []byte) ([]byte, error) {
+	rwc, err := getRawTPM(m.config)
+	if err != nil {
+		return nil, fmt.Errorf("opening TPM: %w", err)
+	}
+	defer rwc.Close()
+
+	// Load AK for signing the quote
+	akInfo, err := m.LoadAK()
+	if err != nil {
+		return nil, fmt.Errorf("loading AK: %w", err)
+	}
+	defer m.CloseAK(akInfo.Handle)
+
+	// Define PCR selection for quote (PCRs 0, 7, 11)
+	pcrSelection := tpm2.PCRSelection{
+		Hash: tpm2.AlgSHA256,
+		PCRs: []int{0, 7, 11},
+	}
+
+	// Generate quote - this cryptographically signs the PCR values with the AK
+	attestation, signature, err := tpm2.Quote(
+		rwc,
+		akInfo.Handle,
+		"", // password (empty)
+		"", // qualifyingData (empty)
+		nonce,
+		pcrSelection,
+		tpm2.AlgNull, // sigAlg (use key's default)
+	)
+	if err != nil {
+		return nil, fmt.Errorf("generating TPM quote: %w", err)
+	}
+
+	// Encode signature to bytes for transmission
+	sigBytes, err := signature.Encode()
+	if err != nil {
+		return nil, fmt.Errorf("encoding signature: %w", err)
+	}
+
+	// Combine attestation and signature into a single blob
+	// In a real implementation, you might want a more structured format
+	quote := append(attestation, sigBytes...)
+	return quote, nil
 }
 
 // getRawTPM returns a raw TPM connection respecting the emulated/real configuration

@@ -17,6 +17,7 @@
 package tpm
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/pem"
 	"fmt"
@@ -25,22 +26,47 @@ import (
 	"github.com/google/go-attestation/attest"
 )
 
+// PCRValues represents PCR measurements for attestation
+type PCRValues struct {
+	PCR0  []byte `json:"pcr0"`  // BIOS/UEFI measurements
+	PCR7  []byte `json:"pcr7"`  // Secure Boot state
+	PCR11 []byte `json:"pcr11"` // UKI measurements
+}
+
 // AttestationData is used to generate challanges from EKs
 type AttestationData struct {
-	EK []byte
-	AK *attest.AttestationParameters
+	EK       []byte                        `json:"ek"`
+	AK       *attest.AttestationParameters `json:"ak"`
+	PCRs     *PCRValues                    `json:"pcrs,omitempty"`      // PCR measurements for boot state verification
+	PCRQuote []byte                        `json:"pcr_quote,omitempty"` // TPM-signed quote of PCR values
+	Nonce    []byte                        `json:"nonce,omitempty"`     // Server-provided nonce for freshness
 }
 
-// Challenge represent the struct returned from the ws server,
-// used to resolve the TPM challenge.
-type Challenge struct {
-	EC *attest.EncryptedCredential
+// ChallengeRequest represents the initial request to KMS for a challenge
+// Only includes what's needed for challenge generation and enrollment/verification
+type ChallengeRequest struct {
+	EK   []byte                        `json:"ek"`   // Endorsement Key (TPM identity) - needed for challenge encryption
+	AK   *attest.AttestationParameters `json:"ak"`   // Attestation Key - needed for challenge binding
+	PCRs *PCRValues                    `json:"pcrs"` // Current PCR measurements - needed for enrollment/verification
 }
 
-// ChallengeResponse represent the struct returned to the ws server
-// as a challenge response.
+// ChallengeResponse represents the server's response containing challenge and nonce
 type ChallengeResponse struct {
-	Secret []byte
+	Challenge *attest.EncryptedCredential `json:"challenge"` // Credential activation challenge
+	Nonce     []byte                      `json:"nonce"`     // Server-generated nonce for next request
+	Enrolled  bool                        `json:"enrolled"`  // True if this was a new enrollment
+}
+
+// ProofRequest represents the client's proof of TPM ownership with anti-replay protection
+type ProofRequest struct {
+	Secret   []byte `json:"secret"`    // Secret recovered by activating the credential
+	Nonce    []byte `json:"nonce"`     // Server nonce from previous response (anti-replay)
+	PCRQuote []byte `json:"pcr_quote"` // Fresh TPM quote with nonce for cryptographic freshness proof
+}
+
+// ProofResponse represents the final response with the decryption passphrase
+type ProofResponse struct {
+	Passphrase []byte `json:"passphrase"` // The actual decryption passphrase
 }
 
 // DecodePubHash returns the public key from an attestation EK
@@ -79,4 +105,15 @@ func pubBytes(ek *attest.EK) ([]byte, error) {
 		return nil, fmt.Errorf("error marshaling ec public key: %v", err)
 	}
 	return data, nil
+}
+
+// GenerateNonce creates a cryptographically secure random nonce
+// for use in remote attestation to ensure freshness
+func GenerateNonce() ([]byte, error) {
+	nonce := make([]byte, 32) // 256-bit nonce
+	_, err := rand.Read(nonce)
+	if err != nil {
+		return nil, fmt.Errorf("generating nonce: %w", err)
+	}
+	return nonce, nil
 }
