@@ -53,7 +53,9 @@ type AKManager struct {
 // Requires WithAKHandleFile option to specify where to store/load the AK blob
 func NewAKManager(opts ...Option) (*AKManager, error) {
 	c := newConfig()
-	c.apply(opts...)
+	if err := c.apply(opts...); err != nil {
+		return nil, fmt.Errorf("applying options: %w", err)
+	}
 
 	if c.akHandleFile == "" {
 		return nil, fmt.Errorf("AK blob file path is required - use WithAKHandleFile option")
@@ -74,7 +76,7 @@ func (m *AKManager) GetOrCreateAK() ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("loading existing AK: %w", err)
 		}
-		defer m.CloseAK(akInfo.Handle)
+		defer m.CloseAK(akInfo.Handle) //nolint:errcheck
 		return akInfo.PublicKeyBytes, nil
 	}
 
@@ -95,7 +97,7 @@ func (m *AKManager) GetAKPublicKey() (crypto.PublicKey, error) {
 	if err != nil {
 		return nil, fmt.Errorf("loading AK: %w", err)
 	}
-	defer m.CloseAK(akInfo.Handle)
+	defer m.CloseAK(akInfo.Handle) //nolint:errcheck
 
 	return akInfo.PublicKey, nil
 }
@@ -131,7 +133,7 @@ func (m *AKManager) createAndStoreAK() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening TPM: %w", err)
 	}
-	defer rwc.Close()
+	defer rwc.Close() //nolint:errcheck
 
 	// Create Storage Root Key (SRK) as parent for the AK
 	srkTemplate := tpm2.Public{
@@ -154,7 +156,7 @@ func (m *AKManager) createAndStoreAK() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("creating SRK: %w", err)
 	}
-	defer tpm2.FlushContext(rwc, srkHandle)
+	defer tpm2.FlushContext(rwc, srkHandle) //nolint:errcheck
 
 	// Create AK template
 	akTemplate := tpm2.Public{
@@ -183,7 +185,7 @@ func (m *AKManager) createAndStoreAK() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("loading AK: %w", err)
 	}
-	defer tpm2.FlushContext(rwc, akHandle)
+	defer tpm2.FlushContext(rwc, akHandle) //nolint:errcheck
 
 	// Get public key for return
 	pub, _, _, err := tpm2.ReadPublic(rwc, akHandle)
@@ -242,7 +244,7 @@ func (m *AKManager) LoadAK() (*AKInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening TPM: %w", err)
 	}
-	defer rwc.Close()
+	defer rwc.Close() //nolint:errcheck
 
 	// Create SRK (same as during creation)
 	srkTemplate := tpm2.Public{
@@ -265,7 +267,7 @@ func (m *AKManager) LoadAK() (*AKInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("creating SRK: %w", err)
 	}
-	defer tpm2.FlushContext(rwc, srkHandle)
+	defer tpm2.FlushContext(rwc, srkHandle) //nolint:errcheck
 
 	// Load the AK from the blob into a transient handle
 	akHandle, _, err := tpm2.Load(rwc, srkHandle, "", blob.Public, blob.Private)
@@ -277,19 +279,25 @@ func (m *AKManager) LoadAK() (*AKInfo, error) {
 	// Get public key
 	pub, _, _, err := tpm2.ReadPublic(rwc, akHandle)
 	if err != nil {
-		tpm2.FlushContext(rwc, akHandle)
+		if flushErr := tpm2.FlushContext(rwc, akHandle); flushErr != nil {
+			return nil, fmt.Errorf("reading AK public key: %w (flush error: %v)", err, flushErr)
+		}
 		return nil, fmt.Errorf("reading AK public key: %w", err)
 	}
 
 	publicKey, err := pub.Key()
 	if err != nil {
-		tpm2.FlushContext(rwc, akHandle)
+		if flushErr := tpm2.FlushContext(rwc, akHandle); flushErr != nil {
+			return nil, fmt.Errorf("extracting public key: %w (flush error: %v)", err, flushErr)
+		}
 		return nil, fmt.Errorf("extracting public key: %w", err)
 	}
 
 	publicKeyBytes, err := pub.Encode()
 	if err != nil {
-		tpm2.FlushContext(rwc, akHandle)
+		if flushErr := tpm2.FlushContext(rwc, akHandle); flushErr != nil {
+			return nil, fmt.Errorf("encoding public key: %w (flush error: %v)", err, flushErr)
+		}
 		return nil, fmt.Errorf("encoding public key: %w", err)
 	}
 
@@ -321,7 +329,7 @@ func (m *AKManager) CloseAK(handle tpmutil.Handle) error {
 	if err != nil {
 		return fmt.Errorf("opening TPM: %w", err)
 	}
-	defer rwc.Close()
+	defer rwc.Close() //nolint:errcheck
 
 	return tpm2.FlushContext(rwc, handle)
 }
@@ -346,7 +354,7 @@ func (m *AKManager) GetChallengeRequest() (*ChallengeRequest, error) {
 	if err != nil {
 		return nil, fmt.Errorf("loading AK: %w", err)
 	}
-	defer m.CloseAK(akInfo.Handle)
+	defer m.CloseAK(akInfo.Handle) //nolint:errcheck
 
 	// Create attestation parameters from our loaded AK
 	attestParams := &attest.AttestationParameters{
@@ -401,21 +409,21 @@ func (m *AKManager) ActivateCredential(challenge *Challenge) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening TPM: %w", err)
 	}
-	defer rwc.Close()
+	defer rwc.Close() //nolint:errcheck
 
 	// Load our actual persistent AK
 	akInfo, err := m.LoadAK()
 	if err != nil {
 		return nil, fmt.Errorf("loading AK: %w", err)
 	}
-	defer m.CloseAK(akInfo.Handle)
+	defer m.CloseAK(akInfo.Handle) //nolint:errcheck
 
 	// Load EK for activation
 	ekHandle, err := m.loadEKHandle(rwc)
 	if err != nil {
 		return nil, fmt.Errorf("loading EK handle: %w", err)
 	}
-	defer tpm2.FlushContext(rwc, ekHandle)
+	defer tpm2.FlushContext(rwc, ekHandle) //nolint:errcheck
 
 	// Use go-tpm ActivateCredential directly
 	secret, err := tpm2.ActivateCredential(
@@ -464,7 +472,7 @@ func (m *AKManager) readPCRValues() (*PCRValues, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening TPM: %w", err)
 	}
-	defer rwc.Close()
+	defer rwc.Close() //nolint:errcheck
 
 	// Read PCRs using ReadPCRs function which can read multiple PCRs at once
 	pcrValues, err := tpm2.ReadPCRs(rwc, tpm2.PCRSelection{
@@ -504,14 +512,14 @@ func (m *AKManager) generatePCRQuote(nonce []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening TPM: %w", err)
 	}
-	defer rwc.Close()
+	defer rwc.Close() //nolint:errcheck
 
 	// Load AK for signing the quote
 	akInfo, err := m.LoadAK()
 	if err != nil {
 		return nil, fmt.Errorf("loading AK: %w", err)
 	}
-	defer m.CloseAK(akInfo.Handle)
+	defer m.CloseAK(akInfo.Handle) //nolint:errcheck
 
 	// Define PCR selection for quote (PCRs 0, 7, 11)
 	pcrSelection := tpm2.PCRSelection{

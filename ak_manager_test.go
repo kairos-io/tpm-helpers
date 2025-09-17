@@ -21,7 +21,7 @@ var _ = Describe("AK Manager", func() {
 	})
 
 	AfterEach(func() {
-		os.RemoveAll(tempDir)
+		os.RemoveAll(tempDir) //nolint:errcheck
 	})
 
 	Context("basic AK operations", func() {
@@ -56,7 +56,7 @@ var _ = Describe("AK Manager", func() {
 			Expect(info.Handle).ToNot(BeZero())
 
 			// Clean up the loaded AK handle
-			manager.CloseAK(info.Handle)
+			manager.CloseAK(info.Handle) //nolint:errcheck
 		})
 
 		It("should be idempotent - return same AK when called multiple times", func() {
