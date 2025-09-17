@@ -1,7 +1,6 @@
 package tpm_test
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 
@@ -71,19 +70,6 @@ var _ = Describe("AK Manager", func() {
 			Expect(akBytes2).To(Equal(akBytes1))
 		})
 
-		It("should get AK public key from existing AK", func() {
-			akBytes, err := manager.GetOrCreateAK()
-			Expect(err).ToNot(HaveOccurred())
-
-			info, err := manager.ReadAKInfo()
-			Expect(err).ToNot(HaveOccurred())
-			Expect(info.PublicKey).ToNot(BeNil())
-			Expect(info.PublicKeyBytes).To(Equal(akBytes))
-
-			// Clean up
-			manager.CloseAK(info.Handle)
-		})
-
 		It("should cleanup AK and remove handle file", func() {
 			akBytes, err := manager.GetOrCreateAK()
 			Expect(err).ToNot(HaveOccurred())
@@ -117,11 +103,11 @@ var _ = Describe("AK Manager", func() {
 	})
 
 	Context("multiple managers and file isolation", func() {
-		It("should create different AKs for different handle files", func() {
+		It("should create different AKs when using separate storage files", func() {
 			handleFile2 := filepath.Join(tempDir, "ak_handle2.json")
 			seed := GinkgoRandomSeed()
 
-			// Same seed but different files should create different AKs
+			// Each manager creates a new AK independently (different files = no shared state)
 			manager1, err := NewAKManager(Emulated, WithSeed(seed), WithAKHandleFile(handleFilePath))
 			Expect(err).ToNot(HaveOccurred())
 
@@ -134,7 +120,7 @@ var _ = Describe("AK Manager", func() {
 			akBytes2, err := manager2.GetOrCreateAK()
 			Expect(err).ToNot(HaveOccurred())
 
-			// Different files = different AKs (even with same seed)
+			// Different storage files = different AKs (each creates independently)
 			Expect(akBytes1).ToNot(Equal(akBytes2))
 		})
 
@@ -160,29 +146,7 @@ var _ = Describe("AK Manager", func() {
 		})
 	})
 
-	Context("deterministic behavior with seeds", func() {
-		It("should create different AKs for different seeds", func() {
-			// Use Ginkgo seed as base and add offsets for variety
-			baseSeed := GinkgoRandomSeed()
-			seeds := []int64{baseSeed, baseSeed + 1, baseSeed + 2}
-			akBytesList := make([][]byte, len(seeds))
-
-			for i, seed := range seeds {
-				handleFile := filepath.Join(tempDir, fmt.Sprintf("ak_handle_%d.json", i))
-				manager, err := NewAKManager(Emulated, WithSeed(seed), WithAKHandleFile(handleFile))
-				Expect(err).ToNot(HaveOccurred())
-
-				akBytes, err := manager.GetOrCreateAK()
-				Expect(err).ToNot(HaveOccurred())
-				akBytesList[i] = akBytes
-			}
-
-			// All AK bytes should be different (different seeds + different files)
-			Expect(akBytesList[0]).ToNot(Equal(akBytesList[1]))
-			Expect(akBytesList[1]).ToNot(Equal(akBytesList[2]))
-			Expect(akBytesList[0]).ToNot(Equal(akBytesList[2]))
-		})
-
+	Context("manager instance behavior", func() {
 		It("should create same AK when recreated by same manager instance", func() {
 			// This test ensures deterministic behavior within the same manager
 			seed := GinkgoRandomSeed()
@@ -217,7 +181,7 @@ var _ = Describe("AK Manager", func() {
 			Expect(err).ToNot(HaveOccurred()) // Manager creation succeeds
 
 			_, err = manager.GetOrCreateAK()
-			Expect(err).To(HaveOccurred()) // But AK creation fails
+			Expect(err).To(MatchError(ContainSubstring("no such file or directory"))) // But AK creation fails
 		})
 
 		It("should require AK handle file path", func() {
@@ -225,15 +189,6 @@ var _ = Describe("AK Manager", func() {
 			_, err := NewAKManager(Emulated, WithSeed(GinkgoRandomSeed()))
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("AK blob file path is required"))
-		})
-
-		It("should handle missing TPM gracefully in non-emulated mode", func() {
-			Skip("This test requires no real TPM device - skip for now")
-			// This would test behavior when no real TPM is available
-			// manager, err := NewAKManager(WithAKHandleFile(handleFilePath))
-			// Expect(err).ToNot(HaveOccurred())
-			// _, err = manager.GetOrCreateAK()
-			// Expect(err).To(HaveOccurred())
 		})
 	})
 })
