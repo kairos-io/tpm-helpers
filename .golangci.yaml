@@ -1,0 +1,20 @@
+version: "2"
+
+run:
+  build-tags:
+    - ci
+
+linters:
+  default: none
+  enable:
+    - revive
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - errcheck
+  settings:
+    revive:
+      rules:
+        - name: dot-imports
+          disabled: true

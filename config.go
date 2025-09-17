@@ -1,3 +1,4 @@
+// Package tpm provides TPM (Trusted Platform Module) utilities for attestation, key management, and secure operations.
 package tpm
 
 import (

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"strings"
 	"time"
@@ -101,7 +100,7 @@ func writeRead(conn *websocket.Conn, input []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	return ioutil.ReadAll(reader)
+	return io.ReadAll(reader)
 }
 
 // Get retrieves a message from a remote ws server after
@@ -118,7 +117,7 @@ func Get(url string, opts ...Option) ([]byte, error) {
 		return nil, fmt.Errorf("reading payload from tpm get: %w", err)
 	}
 
-	return ioutil.ReadAll(msg)
+	return io.ReadAll(msg)
 }
 
 // Connection returns a connection to the endpoint which suathenticated already.
@@ -179,7 +178,7 @@ func Connection(url string, opts ...Option) (*websocket.Conn, error) {
 	if err != nil {
 		if resp != nil {
 			if resp.StatusCode == http.StatusUnauthorized {
-				data, err := ioutil.ReadAll(resp.Body)
+				data, err := io.ReadAll(resp.Body)
 				if err == nil {
 					return nil, errors.New(string(data))
 				}

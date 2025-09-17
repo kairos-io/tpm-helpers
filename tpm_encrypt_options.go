@@ -153,7 +153,7 @@ func parseHandle(s string) (tpmutil.Handle, error) {
 
 func parseNVAttributes(s string) (tpm2.NVAttr, error) {
 	var nvAttr tpm2.NVAttr
-	s = strings.Replace(s, " ", "", -1)
+	s = strings.ReplaceAll(s, " ", "")
 	for _, prop := range strings.Split(s, "|") {
 		v, ok := stringToNVAttribute[prop]
 		if !ok {
@@ -167,7 +167,7 @@ func parseNVAttributes(s string) (tpm2.NVAttr, error) {
 
 func parseKeyAttributes(s string) (tpm2.KeyProp, error) {
 	var keyProp tpm2.KeyProp
-	s = strings.Replace(s, " ", "", -1)
+	s = strings.ReplaceAll(s, " ", "")
 	for _, prop := range strings.Split(s, "|") {
 		v, ok := stringToKeyAttribute[prop]
 		if !ok {
