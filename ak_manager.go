@@ -4,15 +4,11 @@ import (
 	"crypto"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 
 	"github.com/google/go-attestation/attest"
-	"github.com/google/go-tpm-tools/simulator"
 	"github.com/google/go-tpm/tpm2"
-	"github.com/google/go-tpm/tpmutil"
-	"github.com/kairos-io/tpm-helpers/backend"
 )
 
 // DefaultEKAuthPolicy is the standard TPM 2.0 Endorsement Key authorization policy
@@ -30,17 +26,17 @@ var DefaultEKAuthPolicy = []byte{
 	0xF2, 0xA1, 0xDA, 0x1B, 0x33, 0x14, 0x69, 0xAA,
 }
 
-// AKBlob represents the TPM-encrypted AK blob stored on disk
+// AKBlob represents the AK data stored on disk
 type AKBlob struct {
-	Private []byte `json:"private"` // TPM-encrypted private key blob
-	Public  []byte `json:"public"`  // Public key data
+	AKBytes           []byte `json:"ak_bytes"`           // Marshaled go-attestation AK
+	AttestationParams []byte `json:"attestation_params"` // Serialized AttestationParameters from go-attestation
 }
 
 // AKInfo holds information about a loaded Attestation Key
 type AKInfo struct {
-	Handle         tpmutil.Handle   // Transient TPM handle (after loading)
-	PublicKey      crypto.PublicKey // Public key extracted from AK
-	PublicKeyBytes []byte           // Raw public key bytes for transmission
+	PublicKeyBytes    []byte                        // Raw AK public key bytes for transmission
+	AttestationParams *attest.AttestationParameters // Complete AttestationParameters from go-attestation
+	AKBytes           []byte                        // Marshaled AK for later loading
 }
 
 // AKManager manages Attestation Key lifecycle using blob storage
@@ -76,7 +72,6 @@ func (m *AKManager) GetOrCreateAK() ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("loading existing AK: %w", err)
 		}
-		defer m.CloseAK(akInfo.Handle) //nolint:errcheck
 		return akInfo.PublicKeyBytes, nil
 	}
 
@@ -92,14 +87,33 @@ func (m *AKManager) akExists() bool {
 
 // GetAKPublicKey returns the public key for the current AK
 func (m *AKManager) GetAKPublicKey() (crypto.PublicKey, error) {
-	// Load AK info from blob
+	// Open TPM using go-attestation
+	tpm, err := getTPM(m.config)
+	if err != nil {
+		return nil, fmt.Errorf("opening TPM: %w", err)
+	}
+	defer tpm.Close() //nolint:errcheck
+
+	// Load AK and get its public key
 	akInfo, err := m.LoadAK()
 	if err != nil {
 		return nil, fmt.Errorf("loading AK: %w", err)
 	}
-	defer m.CloseAK(akInfo.Handle) //nolint:errcheck
 
-	return akInfo.PublicKey, nil
+	ak, err := tpm.LoadAK(akInfo.AKBytes)
+	if err != nil {
+		return nil, fmt.Errorf("loading AK: %w", err)
+	}
+	defer ak.Close(tpm) //nolint:errcheck
+
+	// Get the public key from the AK's attestation parameters
+	params := ak.AttestationParameters()
+	pub, err := tpm2.DecodePublic(params.Public)
+	if err != nil {
+		return nil, fmt.Errorf("decoding public key: %w", err)
+	}
+
+	return pub.Key()
 }
 
 // ReadAKInfo reads AK information by loading from blob
@@ -126,91 +140,50 @@ func WithAKHandleFile(path string) Option {
 	}
 }
 
-// createAndStoreAK creates a new AK and stores the TPM-encrypted blob to file
+// createAndStoreAK creates a new AK using go-attestation and stores it to file
 func (m *AKManager) createAndStoreAK() ([]byte, error) {
-	// Open TPM
-	rwc, err := getRawTPM(m.config)
+	// Open TPM using go-attestation (same as legacy flow)
+	tpm, err := getTPM(m.config)
 	if err != nil {
 		return nil, fmt.Errorf("opening TPM: %w", err)
 	}
-	defer rwc.Close() //nolint:errcheck
+	defer tpm.Close() //nolint:errcheck
 
-	// Create Storage Root Key (SRK) as parent for the AK
-	srkTemplate := tpm2.Public{
-		Type:    tpm2.AlgRSA,
-		NameAlg: tpm2.AlgSHA256,
-		Attributes: tpm2.FlagFixedTPM | tpm2.FlagFixedParent |
-			tpm2.FlagSensitiveDataOrigin | tpm2.FlagUserWithAuth |
-			tpm2.FlagRestricted | tpm2.FlagDecrypt,
-		RSAParameters: &tpm2.RSAParams{
-			Symmetric: &tpm2.SymScheme{
-				Alg:     tpm2.AlgAES,
-				KeyBits: 128,
-				Mode:    tpm2.AlgCFB,
-			},
-			KeyBits: 2048,
-		},
-	}
-
-	srkHandle, _, err := tpm2.CreatePrimary(rwc, tpm2.HandleOwner, tpm2.PCRSelection{}, "", "", srkTemplate)
-	if err != nil {
-		return nil, fmt.Errorf("creating SRK: %w", err)
-	}
-	defer tpm2.FlushContext(rwc, srkHandle) //nolint:errcheck
-
-	// Create AK template
-	akTemplate := tpm2.Public{
-		Type:    tpm2.AlgRSA,
-		NameAlg: tpm2.AlgSHA256,
-		Attributes: tpm2.FlagFixedTPM | tpm2.FlagFixedParent |
-			tpm2.FlagSensitiveDataOrigin | tpm2.FlagUserWithAuth |
-			tpm2.FlagRestricted | tpm2.FlagSign,
-		RSAParameters: &tpm2.RSAParams{
-			Sign: &tpm2.SigScheme{
-				Alg:  tpm2.AlgRSAPSS,
-				Hash: tpm2.AlgSHA256,
-			},
-			KeyBits: 2048,
-		},
-	}
-
-	// Create the AK under the SRK
-	akPrivate, akPublic, _, _, _, err := tpm2.CreateKey(rwc, srkHandle, tpm2.PCRSelection{}, "", "", akTemplate)
+	// Create AK using go-attestation (same as legacy flow)
+	ak, err := tpm.NewAK(nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating AK: %w", err)
 	}
+	defer ak.Close(tpm) //nolint:errcheck
 
-	// Load the AK to get the public key
-	akHandle, _, err := tpm2.Load(rwc, srkHandle, "", akPublic, akPrivate)
-	if err != nil {
-		return nil, fmt.Errorf("loading AK: %w", err)
-	}
-	defer tpm2.FlushContext(rwc, akHandle) //nolint:errcheck
+	// Get AttestationParameters (same as legacy flow)
+	params := ak.AttestationParameters()
 
-	// Get public key for return
-	pub, _, _, err := tpm2.ReadPublic(rwc, akHandle)
+	// Marshal the AK for storage (same as legacy flow)
+	akBytes, err := ak.Marshal()
 	if err != nil {
-		return nil, fmt.Errorf("reading AK public key: %w", err)
+		return nil, fmt.Errorf("marshaling AK: %w", err)
 	}
 
-	// Extract public key bytes
-	publicKeyBytes, err := pub.Encode()
+	// Serialize the AttestationParameters for storage
+	paramsBytes, err := json.Marshal(params)
 	if err != nil {
-		return nil, fmt.Errorf("encoding public key: %w", err)
+		return nil, fmt.Errorf("marshaling attestation parameters: %w", err)
 	}
 
-	// Create the AK blob structure containing private and public parts
+	// Create the AK blob structure
 	akBlob := AKBlob{
-		Private: akPrivate,
-		Public:  akPublic,
+		AKBytes:           akBytes,
+		AttestationParams: paramsBytes,
 	}
 
-	// Store the TPM-encrypted blob to file
+	// Store the blob to file
 	if err := m.saveAKBlob(&akBlob); err != nil {
 		return nil, fmt.Errorf("saving AK blob: %w", err)
 	}
 
-	return publicKeyBytes, nil
+	// Return the public key bytes (same format as legacy flow)
+	return params.Public, nil
 }
 
 // saveAKBlob saves the AK blob to the configured file
@@ -231,7 +204,7 @@ func (m *AKManager) saveAKBlob(blob *AKBlob) error {
 	return os.WriteFile(m.akBlobFile, data, 0600)
 }
 
-// LoadAK loads the AK from the blob file into a transient TPM handle
+// LoadAK loads the AK from the blob file and deserializes the AttestationParameters
 func (m *AKManager) LoadAK() (*AKInfo, error) {
 	// Load AK blob from file
 	blob, err := m.loadAKBlob()
@@ -239,72 +212,16 @@ func (m *AKManager) LoadAK() (*AKInfo, error) {
 		return nil, fmt.Errorf("loading AK blob: %w", err)
 	}
 
-	// Open TPM
-	rwc, err := getRawTPM(m.config)
-	if err != nil {
-		return nil, fmt.Errorf("opening TPM: %w", err)
-	}
-	defer rwc.Close() //nolint:errcheck
-
-	// Create SRK (same as during creation)
-	srkTemplate := tpm2.Public{
-		Type:    tpm2.AlgRSA,
-		NameAlg: tpm2.AlgSHA256,
-		Attributes: tpm2.FlagFixedTPM | tpm2.FlagFixedParent |
-			tpm2.FlagSensitiveDataOrigin | tpm2.FlagUserWithAuth |
-			tpm2.FlagRestricted | tpm2.FlagDecrypt,
-		RSAParameters: &tpm2.RSAParams{
-			Symmetric: &tpm2.SymScheme{
-				Alg:     tpm2.AlgAES,
-				KeyBits: 128,
-				Mode:    tpm2.AlgCFB,
-			},
-			KeyBits: 2048,
-		},
-	}
-
-	srkHandle, _, err := tpm2.CreatePrimary(rwc, tpm2.HandleOwner, tpm2.PCRSelection{}, "", "", srkTemplate)
-	if err != nil {
-		return nil, fmt.Errorf("creating SRK: %w", err)
-	}
-	defer tpm2.FlushContext(rwc, srkHandle) //nolint:errcheck
-
-	// Load the AK from the blob into a transient handle
-	akHandle, _, err := tpm2.Load(rwc, srkHandle, "", blob.Public, blob.Private)
-	if err != nil {
-		return nil, fmt.Errorf("loading AK from blob: %w", err)
-	}
-	// Note: Don't defer close here - caller will manage the handle
-
-	// Get public key
-	pub, _, _, err := tpm2.ReadPublic(rwc, akHandle)
-	if err != nil {
-		if flushErr := tpm2.FlushContext(rwc, akHandle); flushErr != nil {
-			return nil, fmt.Errorf("reading AK public key: %w (flush error: %v)", err, flushErr)
-		}
-		return nil, fmt.Errorf("reading AK public key: %w", err)
-	}
-
-	publicKey, err := pub.Key()
-	if err != nil {
-		if flushErr := tpm2.FlushContext(rwc, akHandle); flushErr != nil {
-			return nil, fmt.Errorf("extracting public key: %w (flush error: %v)", err, flushErr)
-		}
-		return nil, fmt.Errorf("extracting public key: %w", err)
-	}
-
-	publicKeyBytes, err := pub.Encode()
-	if err != nil {
-		if flushErr := tpm2.FlushContext(rwc, akHandle); flushErr != nil {
-			return nil, fmt.Errorf("encoding public key: %w (flush error: %v)", err, flushErr)
-		}
-		return nil, fmt.Errorf("encoding public key: %w", err)
+	// Deserialize the AttestationParameters
+	var params attest.AttestationParameters
+	if err := json.Unmarshal(blob.AttestationParams, &params); err != nil {
+		return nil, fmt.Errorf("unmarshaling attestation parameters: %w", err)
 	}
 
 	return &AKInfo{
-		Handle:         akHandle,
-		PublicKey:      publicKey,
-		PublicKeyBytes: publicKeyBytes,
+		PublicKeyBytes:    params.Public, // Use the exact same bytes as legacy flow
+		AttestationParams: &params,       // Complete AttestationParameters for challenge generation
+		AKBytes:           blob.AKBytes,  // Marshaled AK for activation
 	}, nil
 }
 
@@ -323,53 +240,25 @@ func (m *AKManager) loadAKBlob() (*AKBlob, error) {
 	return &blob, nil
 }
 
-// CloseAK closes the transient AK handle in the TPM
-func (m *AKManager) CloseAK(handle tpmutil.Handle) error {
-	rwc, err := getRawTPM(m.config)
-	if err != nil {
-		return fmt.Errorf("opening TPM: %w", err)
-	}
-	defer rwc.Close() //nolint:errcheck
-
-	return tpm2.FlushContext(rwc, handle)
-}
-
-// GetChallengeRequest creates the initial challenge request to KMS
-// This works for both first-time enrollment and subsequent verification
-func (m *AKManager) GetChallengeRequest() (*ChallengeRequest, error) {
+// GetAttestationData returns the EK and AttestationParameters for challenge generation
+// This provides go-attestation native types instead of wrapper structs
+func (m *AKManager) GetAttestationData() (*attest.EK, *attest.AttestationParameters, error) {
 	// Get EK using existing function
 	ek, err := getEK(m.config)
 	if err != nil {
-		return nil, fmt.Errorf("getting EK: %w", err)
+		return nil, nil, fmt.Errorf("getting EK: %w", err)
 	}
 
-	// Encode EK using existing function
-	ekBytes, err := encodeEK(ek)
-	if err != nil {
-		return nil, fmt.Errorf("encoding EK: %w", err)
-	}
-
-	// Get AK public key bytes from our persisted AK
+	// Get AK AttestationParameters from our persisted AK
 	akInfo, err := m.LoadAK()
 	if err != nil {
-		return nil, fmt.Errorf("loading AK: %w", err)
-	}
-	defer m.CloseAK(akInfo.Handle) //nolint:errcheck
-
-	// Read current PCR values for enrollment/verification
-	pcrValues, err := m.readPCRValues()
-	if err != nil {
-		return nil, fmt.Errorf("reading PCR values: %w", err)
+		return nil, nil, fmt.Errorf("loading AK: %w", err)
 	}
 
-	return &ChallengeRequest{
-		EK:   ekBytes,               // Needed for challenge encryption
-		AK:   akInfo.PublicKeyBytes, // Raw AK public key bytes for challenge binding
-		PCRs: pcrValues,             // Needed for enrollment/verification (but not challenge generation)
-	}, nil
+	return ek, akInfo.AttestationParams, nil
 }
 
-// CreateProofRequest creates a proof request with the activated credential secret and nonce-based quote
+// CreateProofRequest creates a proof request with the activated credential secret and quote
 func (m *AKManager) CreateProofRequest(challengeResp *AttestationChallengeResponse) (*ProofRequest, error) {
 	// Activate the credential to get the secret
 	challenge := &Challenge{EC: challengeResp.Challenge}
@@ -378,16 +267,15 @@ func (m *AKManager) CreateProofRequest(challengeResp *AttestationChallengeRespon
 		return nil, fmt.Errorf("activating credential: %w", err)
 	}
 
-	// Generate a fresh PCR quote with the server's nonce for cryptographic freshness proof
-	quote, err := m.generatePCRQuote(challengeResp.Nonce)
+	// Generate a fresh PCR quote for cryptographic proof
+	quote, err := m.generatePCRQuote()
 	if err != nil {
-		return nil, fmt.Errorf("generating nonce-based quote: %w", err)
+		return nil, fmt.Errorf("generating quote: %w", err)
 	}
 
 	return &ProofRequest{
 		Secret:   secret,
-		Nonce:    challengeResp.Nonce, // Include server's nonce for anti-replay
-		PCRQuote: quote,               // Cryptographic proof that includes the nonce
+		PCRQuote: quote, // Cryptographic proof of TPM state
 	}, nil
 }
 
@@ -396,174 +284,97 @@ type Challenge struct {
 	EC *attest.EncryptedCredential
 }
 
-// ActivateCredential decrypts a credential blob using the loaded AK and EK
+// ActivateCredential decrypts a credential blob using go-attestation
 // Takes the challenge received from server and returns the recovered secret
 func (m *AKManager) ActivateCredential(challenge *Challenge) ([]byte, error) {
-	// Open raw TPM for go-tpm operations
-	rwc, err := getRawTPM(m.config)
+	// Open TPM using go-attestation
+	tpm, err := getTPM(m.config)
 	if err != nil {
 		return nil, fmt.Errorf("opening TPM: %w", err)
 	}
-	defer rwc.Close() //nolint:errcheck
+	defer tpm.Close() //nolint:errcheck
 
-	// Load our actual persistent AK
+	// Load AK using go-attestation (same as legacy flow)
 	akInfo, err := m.LoadAK()
+	if err != nil {
+		return nil, fmt.Errorf("loading AK info: %w", err)
+	}
+
+	// Load the marshaled AK using go-attestation
+	ak, err := tpm.LoadAK(akInfo.AKBytes)
 	if err != nil {
 		return nil, fmt.Errorf("loading AK: %w", err)
 	}
-	defer m.CloseAK(akInfo.Handle) //nolint:errcheck
+	defer ak.Close(tpm) //nolint:errcheck
 
-	// Load EK for activation
-	ekHandle, err := m.loadEKHandle(rwc)
+	// Use go-attestation's ActivateCredential (same as legacy flow)
+	secret, err := ak.ActivateCredential(tpm, *challenge.EC)
 	if err != nil {
-		return nil, fmt.Errorf("loading EK handle: %w", err)
-	}
-	defer tpm2.FlushContext(rwc, ekHandle) //nolint:errcheck
-
-	// Use go-tpm ActivateCredential directly
-	secret, err := tpm2.ActivateCredential(
-		rwc,
-		akInfo.Handle,           // activeHandle (our loaded AK)
-		ekHandle,                // keyHandle (EK for decryption)
-		"",                      // activePassword (empty)
-		"",                      // protectorPassword (empty)
-		challenge.EC.Credential, // credBlob
-		challenge.EC.Secret,     // secret
-	)
-	if err != nil {
-		return nil, fmt.Errorf("activating credential with TPM: %w", err)
+		return nil, fmt.Errorf("activating credential: %w", err)
 	}
 
 	return secret, nil
 }
 
-// loadEKHandle loads the EK and returns its handle for activation
-func (m *AKManager) loadEKHandle(rwc io.ReadWriteCloser) (tpmutil.Handle, error) {
-	// EK template for RSA 2048 - same as in GetEnrollmentPayload logic
-	ekTemplate := tpm2.Public{
-		Type:    tpm2.AlgRSA,
-		NameAlg: tpm2.AlgSHA256,
-		Attributes: tpm2.FlagFixedTPM | tpm2.FlagFixedParent |
-			tpm2.FlagSensitiveDataOrigin | tpm2.FlagAdminWithPolicy |
-			tpm2.FlagRestricted | tpm2.FlagDecrypt,
-		AuthPolicy: DefaultEKAuthPolicy,
-		RSAParameters: &tpm2.RSAParams{
-			KeyBits: 2048,
-		},
-	}
-
-	// Create EK primary key
-	ekHandle, _, err := tpm2.CreatePrimary(rwc, tpm2.HandleEndorsement, tpm2.PCRSelection{}, "", "", ekTemplate)
-	if err != nil {
-		return 0, fmt.Errorf("creating EK primary: %w", err)
-	}
-
-	return ekHandle, nil
-}
-
 // readPCRValues reads PCR values 0, 7, and 11 from the TPM
 func (m *AKManager) readPCRValues() (*PCRValues, error) {
-	rwc, err := getRawTPM(m.config)
+	// Open TPM using go-attestation
+	tpm, err := getTPM(m.config)
 	if err != nil {
 		return nil, fmt.Errorf("opening TPM: %w", err)
 	}
-	defer rwc.Close() //nolint:errcheck
+	defer tpm.Close() //nolint:errcheck
 
-	// Read PCRs using ReadPCRs function which can read multiple PCRs at once
-	pcrValues, err := tpm2.ReadPCRs(rwc, tpm2.PCRSelection{
-		Hash: tpm2.AlgSHA256,
-		PCRs: []int{0, 7, 11},
-	})
+	// Read PCRs using go-attestation
+	pcrs, err := tpm.PCRs(attest.HashSHA256)
 	if err != nil {
 		return nil, fmt.Errorf("reading PCRs: %w", err)
 	}
 
 	// Extract individual PCR values
-	pcr0, ok := pcrValues[0]
-	if !ok {
-		return nil, fmt.Errorf("PCR 0 not found in response")
-	}
-
-	pcr7, ok := pcrValues[7]
-	if !ok {
-		return nil, fmt.Errorf("PCR 7 not found in response")
-	}
-
-	pcr11, ok := pcrValues[11]
-	if !ok {
-		return nil, fmt.Errorf("PCR 11 not found in response")
+	if len(pcrs) <= 11 {
+		return nil, fmt.Errorf("insufficient PCRs available")
 	}
 
 	return &PCRValues{
-		PCR0:  pcr0,
-		PCR7:  pcr7,
-		PCR11: pcr11,
+		PCR0:  pcrs[0].Digest,
+		PCR7:  pcrs[7].Digest,
+		PCR11: pcrs[11].Digest,
 	}, nil
 }
 
 // generatePCRQuote generates a TPM quote (signed attestation) of PCR values using the AK
-func (m *AKManager) generatePCRQuote(nonce []byte) ([]byte, error) {
-	rwc, err := getRawTPM(m.config)
+func (m *AKManager) generatePCRQuote() ([]byte, error) {
+	// Open TPM using go-attestation
+	tpm, err := getTPM(m.config)
 	if err != nil {
 		return nil, fmt.Errorf("opening TPM: %w", err)
 	}
-	defer rwc.Close() //nolint:errcheck
+	defer tpm.Close() //nolint:errcheck
 
-	// Load AK for signing the quote
+	// Load AK using go-attestation
 	akInfo, err := m.LoadAK()
+	if err != nil {
+		return nil, fmt.Errorf("loading AK info: %w", err)
+	}
+
+	ak, err := tpm.LoadAK(akInfo.AKBytes)
 	if err != nil {
 		return nil, fmt.Errorf("loading AK: %w", err)
 	}
-	defer m.CloseAK(akInfo.Handle) //nolint:errcheck
+	defer ak.Close(tpm) //nolint:errcheck
 
-	// Define PCR selection for quote (PCRs 0, 7, 11)
-	pcrSelection := tpm2.PCRSelection{
-		Hash: tpm2.AlgSHA256,
-		PCRs: []int{0, 7, 11},
-	}
-
-	// Generate quote - this cryptographically signs the PCR values with the AK
-	attestation, signature, err := tpm2.Quote(
-		rwc,
-		akInfo.Handle,
-		"", // password (empty)
-		"", // qualifyingData (empty)
-		nonce,
-		pcrSelection,
-		tpm2.AlgNull, // sigAlg (use key's default)
-	)
+	// Generate quote using go-attestation with empty qualifying data
+	quote, err := ak.Quote(tpm, nil, attest.HashSHA256)
 	if err != nil {
-		return nil, fmt.Errorf("generating TPM quote: %w", err)
+		return nil, fmt.Errorf("generating PCR quote: %w", err)
 	}
 
-	// Encode signature to bytes for transmission
-	sigBytes, err := signature.Encode()
+	// Encode the quote for transmission
+	quoteBytes, err := json.Marshal(quote)
 	if err != nil {
-		return nil, fmt.Errorf("encoding signature: %w", err)
+		return nil, fmt.Errorf("marshaling quote: %w", err)
 	}
 
-	// Combine attestation and signature into a single blob
-	// In a real implementation, you might want a more structured format
-	quote := append(attestation, sigBytes...)
-	return quote, nil
-}
-
-// getRawTPM returns a raw TPM connection respecting the emulated/real configuration
-func getRawTPM(c *config) (io.ReadWriteCloser, error) {
-	if c.emulated {
-		var sim *simulator.Simulator
-		var err error
-		if c.seed != 0 {
-			sim, err = simulator.GetWithFixedSeedInsecure(c.seed)
-		} else {
-			sim, err = simulator.Get()
-		}
-		if err != nil {
-			return nil, fmt.Errorf("getting simulator: %w", err)
-		}
-		return backend.Fake(sim), nil
-	}
-
-	// Use real TPM
-	return tpm2.OpenTPM()
+	return quoteBytes, nil
 }

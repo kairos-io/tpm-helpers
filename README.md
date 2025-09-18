@@ -4,25 +4,24 @@ A fork of https://github.com/rancher-sandbox/go-tpm with additional capabilities
 
 ## Remote Attestation with KMS
 
-This library provides a complete implementation for remote attestation with a Key Management Service (KMS) using TPM-based cryptographic proofs. The flow supports both initial enrollment and subsequent verification seamlessly.
+This library provides a complete implementation for remote attestation with a Key Management Service (KMS) using TPM-based cryptographic proofs over WebSocket connections. The flow supports both initial enrollment and subsequent verification seamlessly.
 
 ### Overview
 
 The remote attestation flow allows a machine to:
 1. **Prove its TPM identity** to a remote KMS
 2. **Demonstrate boot state integrity** via PCR measurements  
-3. **Ensure request freshness** using server-generated nonces
-4. **Obtain decryption passphrases** securely
+3. **Obtain decryption passphrases** securely over a WebSocket connection
 
-The client doesn't need to know whether it's the first time contacting the KMS (enrollment) or a repeat visit (verification) - the same flow works for both.
+The client doesn't need to know whether it's the first time contacting the KMS (enrollment) or a repeat visit (verification) — the same flow works for both.
 
 ### Security Guarantees
 
 - **TPM Identity**: Endorsement Key (EK) proves requests come from a genuine TPM
-- **Key Binding**: Attestation Key (AK) is bound to the specific TPM chip
+- **Key Binding**: Attestation Key (AK) is bound to the specific TPM chip  
 - **Boot State Verification**: PCRs 0, 7, 11 prove system integrity hasn't changed
-- **Freshness**: Server nonces prevent replay attacks
-- **Cryptographic Proof**: TPM quotes sign PCR values + nonce with the AK
+- **Connection Security**: WebSocket connection provides session binding and prevents replay attacks
+- **Cryptographic Proof**: TPM quotes and credential activation provide cryptographic proof of TPM ownership
 
 ### Usage
 
@@ -44,40 +43,32 @@ if err != nil {
 }
 ```
 
-#### 2. Request Decryption Passphrase
+#### 2. WebSocket Attestation Flow
 
 ```go
-// Step 1: Request challenge from KMS
-challengeReq, err := akManager.GetChallengeRequest()
+import "github.com/gorilla/websocket"
+
+// Step 1: Connect to KMS WebSocket endpoint
+conn, err := websocket.Dial("wss://kms.example.com/attestation", nil)
 if err != nil {
-    return fmt.Errorf("creating challenge request: %w", err)
+    return fmt.Errorf("connecting to KMS: %w", err)
+}
+defer conn.Close()
+
+// Step 2: Get attestation data using go-attestation native types
+ek, akParams, err := akManager.GetAttestationData()
+if err != nil {
+    return fmt.Errorf("getting attestation data: %w", err)
 }
 
-// Send challengeReq to KMS endpoint
-challengeResp, err := sendChallengeRequestToKMS(challengeReq)
-if err != nil {
-    return fmt.Errorf("requesting challenge: %w", err)
-}
-
-// Step 2: Create proof of TPM ownership with nonce
-proofReq, err := akManager.CreateProofRequest(challengeResp)
-if err != nil {
-    return fmt.Errorf("creating proof request: %w", err)
-}
-
-// Send proofReq to KMS endpoint  
-proofResp, err := sendProofRequestToKMS(proofReq)
-if err != nil {
-    return fmt.Errorf("sending proof: %w", err)
-}
-
-// proofResp.Passphrase contains the decryption key
+// Step 3: Server sends challenge, client responds with proof
+// (See complete WebSocket flow example below)
 ```
 
-#### 3. Complete Example
+#### 3. Complete WebSocket Flow Example
 
 ```go
-func RequestDecryptionPassphrase() ([]byte, error) {
+func RequestDecryptionPassphraseWebSocket() ([]byte, error) {
     // Initialize AK manager
     akManager, err := tpm.NewAKManager(tpm.WithAKHandleFile("/etc/kairos/ak.blob"))
     if err != nil {
@@ -90,26 +81,40 @@ func RequestDecryptionPassphrase() ([]byte, error) {
         return nil, err
     }
     
-    // Request challenge+nonce from KMS
-    challengeReq, err := akManager.GetChallengeRequest()
+    // Connect to KMS WebSocket endpoint
+    conn, err := websocket.Dial("wss://kms.example.com/attestation", nil)
+    if err != nil {
+        return nil, err
+    }
+    defer conn.Close()
+    
+    // Get attestation data using go-attestation native types
+    ek, akParams, err := akManager.GetAttestationData()
     if err != nil {
         return nil, err
     }
     
-    challengeResp, err := sendChallengeRequestToKMS(challengeReq)
+    // Server immediately sends challenge upon connection
+    var challengeResp AttestationChallengeResponse
+    if err := conn.ReadJSON(&challengeResp); err != nil {
+        return nil, fmt.Errorf("reading challenge: %w", err)
+    }
+    
+    // Generate proof of TPM ownership
+    proofReq, err := akManager.CreateProofRequest(&challengeResp)
     if err != nil {
         return nil, err
     }
     
-    // Prove TPM ownership with freshness
-    proofReq, err := akManager.CreateProofRequest(challengeResp)
-    if err != nil {
-        return nil, err
+    // Send proof to server
+    if err := conn.WriteJSON(proofReq); err != nil {
+        return nil, fmt.Errorf("sending proof: %w", err)
     }
     
-    proofResp, err := sendProofRequestToKMS(proofReq)
-    if err != nil {
-        return nil, err
+    // Receive passphrase from server
+    var proofResp ProofResponse
+    if err := conn.ReadJSON(&proofResp); err != nil {
+        return nil, fmt.Errorf("reading passphrase: %w", err)
     }
     
     return proofResp.Passphrase, nil
@@ -118,20 +123,12 @@ func RequestDecryptionPassphrase() ([]byte, error) {
 
 ### Data Structures
 
-#### ChallengeRequest
-```go
-type ChallengeRequest struct {
-    EK   []byte     // Endorsement Key (TPM identity)
-    AK   []byte     // Raw AK public key bytes (for signing)  
-    PCRs *PCRValues // Current PCR measurements
-}
-```
+The WebSocket flow uses these data structures for the attestation protocol:
 
 #### AttestationChallengeResponse  
 ```go
 type AttestationChallengeResponse struct {
     Challenge *attest.EncryptedCredential // Credential activation challenge
-    Nonce     []byte                      // Server-generated nonce
     Enrolled  bool                        // True if this was first-time enrollment
 }
 ```
@@ -140,8 +137,7 @@ type AttestationChallengeResponse struct {
 ```go
 type ProofRequest struct {
     Secret   []byte // Secret from credential activation (proves TPM ownership)
-    Nonce    []byte // Server nonce (anti-replay protection)  
-    PCRQuote []byte // TPM quote with nonce (cryptographic freshness proof)
+    PCRQuote []byte // TPM quote (cryptographic proof of TPM state)
 }
 ```
 
@@ -152,183 +148,222 @@ type ProofResponse struct {
 }
 ```
 
-### Server-Side Implementation
+### Go-Attestation Native Types
 
-The library provides helper functions for KMS server implementation:
+For direct use with go-attestation library (recommended approach):
+
+```go
+// Get EK and AttestationParameters directly
+ek, akParams, err := akManager.GetAttestationData()
+
+// Use go-attestation types for challenge generation
+secret, challenge, err := tpm.GenerateChallenge(ek, akParams)
+```
+
+### WebSocket Server-Side Implementation
+
+The library provides helper functions for KMS WebSocket server implementation.
 
 #### Available Server Functions
 
 ```go
-// Generate a cryptographically secure nonce
-func GenerateNonce() ([]byte, error)
-
 // Parse attestation data from client requests  
 func DecodeEK(pemBytes []byte) (*attest.EK, error)
-func GetAttestationData(header string) (*attest.EK, *AttestationData, error)
 
-// Generate credential activation challenge
-func GenerateChallenge(ek *attest.EK, attestationData *AttestationData) ([]byte, []byte, error)
+// Generate credential activation challenge using go-attestation native types
+func GenerateChallenge(ek *attest.EK, akParams *attest.AttestationParameters) ([]byte, []byte, error)
 
 // Validate challenge responses
 func ValidateChallenge(secret, resp []byte) error
 ```
 
-#### Server Implementation Example
+#### WebSocket Protocol Flow
+
+```
+Client                           Server
+  |-- WebSocket Connect --------->|
+  |                               |
+  |<------ Challenge -------------|  Server sends AttestationChallengeResponse
+  |                               |
+  |------ ProofRequest --------->|  Client proves TPM ownership
+  |                               |
+  |<------ ProofResponse ---------|  Server sends passphrase
+  |                               |
+Connection closed
+```
+
+#### WebSocket Server Implementation Example
 
 ```go
-// Handle ChallengeRequest
-func handleChallengeRequest(req *ChallengeRequest) (*AttestationChallengeResponse, error) {
-    // 1. Decode EK from request
-    ek, err := tpm.DecodeEK(req.EK)
-    if err != nil {
-        return nil, fmt.Errorf("decoding EK: %w", err)
+import "github.com/gorilla/websocket"
+
+// WebSocket handler for TPM attestation
+func handleTPMAttestation(w http.ResponseWriter, r *http.Request) {
+    // Upgrade to WebSocket
+    upgrader := websocket.Upgrader{
+        CheckOrigin: func(r *http.Request) bool { return true },
     }
     
-    // 2. Check enrollment vs verification
-    tpmHash := hashEK(req.EK) // Your TPM identification logic
+    conn, err := upgrader.Upgrade(w, r, nil)
+    if err != nil {
+        http.Error(w, "WebSocket upgrade failed", http.StatusBadRequest)
+        return
+    }
+    defer conn.Close()
+    
+    // Get client's attestation data (sent during WebSocket handshake or first message)
+    ek, akParams, err := getClientAttestationData(conn)
+    if err != nil {
+        sendError(conn, "Failed to get attestation data")
+        return
+    }
+    
+    // 1. Check enrollment vs verification
+    enrolled := false
+    tpmHash := hashEK(ek) // Your TPM identification logic
     if isFirstTime(tpmHash) {
         // Enrollment: store TPM identity and PCR values
-        err = storeTPMIdentity(tpmHash, req.AK, req.PCRs)
+        err = storeTPMIdentity(tpmHash, akParams)
         if err != nil {
-            return nil, err
+            sendError(conn, "Failed to store TPM identity")
+            return
         }
         enrolled = true
     } else {
-        // Verification: validate PCRs match stored values
-        if !pcrValuesMatch(tpmHash, req.PCRs) {
-            return nil, errors.New("PCR values changed - possible compromise")
+        // Verification: validate PCRs match stored values  
+        if !attestationMatches(tpmHash, akParams) {
+            sendError(conn, "PCR values changed - possible compromise")
+            return
         }
     }
     
-    // 3. Generate challenge using library function
-    attestData := &tpm.AttestationData{
-        EK: req.EK,
-        AK: req.AK,
-    }
-    secret, challengeBytes, err := tpm.GenerateChallenge(ek, attestData)
+    // 2. Generate challenge using go-attestation native types
+    secret, challengeBytes, err := tpm.GenerateChallenge(ek, akParams)
     if err != nil {
-        return nil, fmt.Errorf("generating challenge: %w", err)
+        sendError(conn, "Failed to generate challenge")
+        return
     }
     
-    // 4. Generate fresh nonce
-    nonce, err := tpm.GenerateNonce()
-    if err != nil {
-        return nil, fmt.Errorf("generating nonce: %w", err)
-    }
+    // 3. Store secret for this WebSocket session
+    sessionID := generateSessionID() 
+    storeSessionSecret(sessionID, secret)
     
-    // 5. Store secret and nonce for validation
-    storeChallenge(tmpHash, secret, nonce)
-    
-    // 6. Parse and return challenge
+    // 4. Parse and send challenge to client
     var challenge Challenge
     json.Unmarshal(challengeBytes, &challenge)
     
-    return &AttestationChallengeResponse{
+    challengeResp := &AttestationChallengeResponse{
         Challenge: challenge.EC,
-        Nonce:     nonce,
         Enrolled:  enrolled,
-    }, nil
-}
-
-// Handle ProofRequest  
-func handleProofRequest(req *ProofRequest) (*ProofResponse, error) {
-    // 1. Verify nonce is fresh and valid
-    if !isNonceValid(req.Nonce) {
-        return nil, errors.New("invalid or expired nonce")
     }
     
-    // 2. Get stored challenge data
-    secret, err := getStoredSecret(req.Nonce)
-    if err != nil {
-        return nil, err
+    if err := conn.WriteJSON(challengeResp); err != nil {
+        return
     }
     
-    // 3. Validate challenge response using library function
-    respBytes, _ := json.Marshal(ChallengeResponse{Secret: req.Secret})
+    // 5. Wait for proof from client
+    var proofReq ProofRequest
+    if err := conn.ReadJSON(&proofReq); err != nil {
+        sendError(conn, "Failed to read proof")
+        return
+    }
+    
+    // 6. Validate challenge response
+    respBytes, _ := json.Marshal(ChallengeResponse{Secret: proofReq.Secret})
     if err := tpm.ValidateChallenge(secret, respBytes); err != nil {
-        return nil, fmt.Errorf("challenge validation failed: %w", err)
+        sendError(conn, "Challenge validation failed")
+        return
     }
     
-    // 4. Verify PCR quote contains expected nonce
-    if !verifyPCRQuoteContainsNonce(req.PCRQuote, req.Nonce) {
-        return nil, errors.New("PCR quote does not contain expected nonce")
+    // 7. Verify PCR quote (optional additional verification)
+    if !verifyPCRQuote(proofReq.PCRQuote, tpmHash) {
+        sendError(conn, "PCR quote verification failed")
+        return
     }
     
-    // 5. Consume nonce and return passphrase
-    consumeNonce(req.Nonce)
-    return &ProofResponse{
-        Passphrase: getDecryptionPassphrase(),
-    }, nil
+    // 8. Send passphrase to client
+    proofResp := &ProofResponse{
+        Passphrase: getDecryptionPassphrase(tpmHash),
+    }
+    
+    conn.WriteJSON(proofResp)
+    
+    // Connection closes automatically, preventing reuse
 }
 ```
 
 #### Server Implementation Notes
 
-The KMS server should:
+The KMS WebSocket server should:
 
-1. **On ChallengeRequest**:
-   - Use `tpm.DecodeEK()` to parse the EK
+1. **On WebSocket Connection**:
+   - Upgrade HTTP connection to WebSocket
+   - Get client's attestation data (EK and AttestationParameters)
    - Use `tpm.GenerateChallenge()` to create credential activation challenge
-   - Use `tpm.GenerateNonce()` for fresh nonce generation
-   - Use `PCRs` to determine enrollment vs verification
-   - Store challenge secret and nonce for later validation
+   - Use PCR measurements to determine enrollment vs verification
+   - Store challenge secret for this specific WebSocket session
 
 2. **On ProofRequest**:
-   - Verify nonce is fresh and valid
-   - Use `tpm.ValidateChallenge()` to verify the secret
-   - Verify `PCRQuote` signature and nonce inclusion
-   - Consume nonce to prevent reuse
+   - Use `tpm.ValidateChallenge()` to verify the secret matches
+   - Verify `PCRQuote` signature and content (optional)
    - Return decryption passphrase
+   - Close connection to prevent reuse
 
-### Nonce Management Best Practices
+### WebSocket Security Model
 
-Secure nonce handling is critical for preventing replay attacks. The KMS implementation should handle nonce storage and validation.
+The WebSocket approach provides inherent security against replay attacks without requiring nonces:
 
-#### Storage Options
+#### Connection-Based Security
 
-1. **In-Memory Cache (Single Server)**
-   - Best performance for single-server deployments
-   - Use thread-safe data structures with expiry tracking
-   - Implement periodic cleanup to prevent memory leaks
-   - Suitable when no load balancing is required
+1. **Session Binding**
+   - Each challenge is bound to a specific WebSocket connection
+   - Challenges cannot be replayed across different connections
+   - Connection state prevents skipping authentication steps
 
-2. **Redis Cache (Recommended for Production)**
-   - Ideal for load-balanced/multi-server environments
-   - Built-in TTL (time-to-live) for automatic expiry
-   - Atomic operations for thread-safe check-and-delete
-   - Shared state across multiple KMS instances
+2. **Sequential Protocol**
+   - Server only sends passphrase after successful challenge resolution
+   - No separate endpoints - single sequential flow within the connection
+   - Impossible to "jump to step 2" without completing step 1
 
-3. **Database Storage (Audit Requirements)**
-   - When persistent audit trails are required
-   - Slower but provides compliance logging
-   - Use atomic UPDATE operations for single-use enforcement
-   - Implement scheduled cleanup jobs
+3. **Automatic Cleanup**
+   - Connection closure automatically invalidates any stored secrets
+   - No need for complex nonce expiry or cleanup mechanisms
+   - Natural session lifecycle management
 
-#### Security Recommendations
+#### Replay Attack Prevention
 
-1. **Expiry Time**
-   - **5-15 minutes recommended** - balance security vs user experience
-   - Consider network latency and potential clock skew
-   - Shorter expiry reduces replay attack window
+**Why WebSockets Prevent Replay Attacks:**
 
-2. **Enforcement Rules**
-   - **Single-use only** - consume nonce immediately after validation
-   - **Atomic operations** - prevent race conditions in multi-threaded environments
-   - **Automatic cleanup** - remove expired nonces to prevent memory/storage bloat
+- ✅ **Fresh Connection Required**: Each attestation requires a new WebSocket connection
+- ✅ **Fresh Challenge**: Server generates a new challenge for each connection  
+- ✅ **Session Isolation**: Secrets are tied to the specific connection session
+- ✅ **Sequential Flow**: Cannot skip challenge step to request passphrase
+- ✅ **Connection Closure**: Automatic cleanup when connection ends
 
-3. **Additional Security Measures**
-   - Rate limiting per client IP address
-   - Maximum concurrent nonces per TPM identity
-   - Security monitoring and alerting for suspicious patterns
-   - Logging for audit and forensic analysis
+**Attack Scenarios That Are Prevented:**
 
-#### Implementation Considerations
+1. **Replaying Old Challenges**: Attacker cannot reuse old challenge/response pairs because:
+   - They need a new WebSocket connection
+   - Server will generate a fresh challenge for the new connection
+   - Old challenge response won't match new challenge
 
-- Use the library's `tpm.GenerateNonce()` function for secure nonce generation
-- Store nonces with their expiry time for efficient validation
-- Implement thread-safe access for concurrent request handling
-- Consider using Redis for production deployments with multiple KMS servers
-- Set up monitoring for nonce usage patterns and potential abuse
+2. **Man-in-the-Middle**: Even if attacker captures the entire flow:
+   - They still need to establish their own WebSocket connection  
+   - Server will issue a different challenge
+   - Captured responses won't work with the new challenge
+
+3. **Session Hijacking**: Connection-based security prevents:
+   - Interception of in-flight messages
+   - Reuse of authentication across sessions
+   - Bypassing the challenge step
+
+#### Implementation Benefits
+
+- **Simpler Code**: No nonce generation, storage, or validation logic needed
+- **Better Performance**: No database/cache operations for nonce management
+- **Natural Security**: WebSocket protocol provides session binding
+- **Cleaner Architecture**: Single connection handles entire flow
+- **Reduced Attack Surface**: Fewer moving parts means fewer vulnerabilities
 
 ### PCR Measurements
 

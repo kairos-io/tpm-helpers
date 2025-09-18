@@ -3,7 +3,6 @@ package tpm
 import (
 	"bytes"
 	"crypto/x509"
-	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -15,24 +14,24 @@ import (
 	"github.com/pkg/errors"
 )
 
-// GenerateChallenge generates a challenge from attestation data and a public endorsed key
-func GenerateChallenge(ek *attest.EK, attestationData *AttestationData) ([]byte, []byte, error) {
-	// Parse raw AK bytes into AttestationParameters
-	akParams, err := ParseAKBytes(attestationData.AK)
-	if err != nil {
-		return nil, nil, fmt.Errorf("parsing AK bytes: %w", err)
-	}
+// GenerateChallenge generates a challenge from attestation parameters and a public endorsed key
+// This is the main function that should be used with go-attestation's native types
+func GenerateChallenge(ek *attest.EK, akParams *attest.AttestationParameters) ([]byte, []byte, error) {
+	fmt.Printf("Debug: GenerateChallenge called with EK.Public type: %T, AK Public length: %d\n", ek.Public, len(akParams.Public))
 
 	ap := attest.ActivationParameters{
 		TPMVersion: attest.TPMVersion20,
 		EK:         ek.Public,
-		AK:         *akParams,
+		AK:         *akParams, // Use the AttestationParameters directly
 	}
 
+	fmt.Printf("Debug: About to call ap.Generate() with TPMVersion: %v\n", ap.TPMVersion)
 	secret, ec, err := ap.Generate()
 	if err != nil {
+		fmt.Printf("Debug: ap.Generate() failed with error: %v\n", err)
 		return nil, nil, fmt.Errorf("generating challenge: %w", err)
 	}
+	fmt.Printf("Debug: ap.Generate() succeeded, secret length: %d\n", len(secret))
 
 	challengeBytes, err := json.Marshal(Challenge{EC: ec})
 	if err != nil {
@@ -120,60 +119,6 @@ func getEK(c *config) (*attest.EK, error) {
 	return &eks[0], nil
 }
 
-func getToken(data *AttestationData) (string, error) {
-	bytes, err := json.Marshal(data)
-	if err != nil {
-		return "", fmt.Errorf("marshalling attestation data: %w", err)
-	}
-
-	return "Bearer TPM" + base64.StdEncoding.EncodeToString(bytes), nil
-}
-
-func getAttestationData(c *config) (*AttestationData, []byte, error) {
-	var err error
-
-	tpm, err := getTPM(c)
-	if err != nil {
-		return nil, nil, fmt.Errorf("opening tpm for getting attestation data: %w", err)
-	}
-	defer tpm.Close() //nolint:errcheck // Cleanup operation //nolint:errcheck // Cleanup operation
-
-	eks, err := tpm.EKs()
-	if err != nil {
-		return nil, nil, err
-	}
-
-	ak, err := tpm.NewAK(nil)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer ak.Close(tpm) //nolint:errcheck // Cleanup operation
-
-	// Get AK public key bytes
-	params := ak.AttestationParameters()
-	akPublicBytes := params.Public
-
-	if len(eks) == 0 {
-		return nil, nil, fmt.Errorf("failed to find EK")
-	}
-
-	ek := &eks[0]
-	ekBytes, err := encodeEK(ek)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	aikBytes, err := ak.Marshal()
-	if err != nil {
-		return nil, nil, fmt.Errorf("marshaling AK: %w", err)
-	}
-
-	return &AttestationData{
-		EK: ekBytes,
-		AK: akPublicBytes, // Use raw public key bytes
-	}, aikBytes, nil
-}
-
 // DecodeEK decodes EK pem bytes to attest.EK
 func DecodeEK(pemBytes []byte) (*attest.EK, error) {
 	block, _ := pem.Decode(pemBytes)
@@ -205,26 +150,6 @@ func DecodeEK(pemBytes []byte) (*attest.EK, error) {
 	}
 
 	return nil, fmt.Errorf("invalid pem type: %s", block.Type)
-}
-
-// GetAttestationData returns attestation data from a TPM bearer token
-func GetAttestationData(header string) (*attest.EK, *AttestationData, error) {
-	tpmBytes, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(header, "Bearer TPM"))
-	if err != nil {
-		return nil, nil, err
-	}
-
-	var attestationData AttestationData
-	if err := json.Unmarshal(tpmBytes, &attestationData); err != nil {
-		return nil, nil, err
-	}
-
-	ek, err := DecodeEK(attestationData.EK)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return ek, &attestationData, nil
 }
 
 // ValidateChallenge validates a challange against a secret

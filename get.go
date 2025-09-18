@@ -239,3 +239,60 @@ func getChallengeResponse(c *config, ec *attest.EncryptedCredential, aikBytes []
 		Secret: secret,
 	}, nil
 }
+
+// AttestationConnection returns a simple WebSocket connection for the new TPM attestation flow.
+// Unlike Connection(), this function does not perform any authentication handshake - it just
+// establishes the WebSocket connection and returns it for the caller to manage the protocol.
+func AttestationConnection(url string, opts ...Option) (*websocket.Conn, error) {
+	c := newConfig()
+	c.apply(opts...) //nolint:errcheck // Config validation happens later
+
+	header := c.header
+	if c.header == nil {
+		header = http.Header{}
+	}
+
+	dialer := websocket.DefaultDialer
+	if len(c.cacerts) > 0 {
+		pool := x509.NewCertPool()
+		if c.systemfallback {
+			systemPool, err := x509.SystemCertPool()
+			if err != nil {
+				return nil, err
+			}
+			pool = systemPool
+		}
+
+		pool.AppendCertsFromPEM(c.cacerts)
+		dialer = &websocket.Dialer{
+			Proxy:            http.ProxyFromEnvironment,
+			HandshakeTimeout: 45 * time.Second,
+			TLSClientConfig: &tls.Config{
+				RootCAs: pool,
+			},
+		}
+	}
+
+	// Add any additional headers
+	for k, v := range c.headers {
+		header.Add(k, v)
+	}
+
+	wsURL := strings.Replace(url, "http", "ws", 1)
+	conn, resp, err := dialer.Dial(wsURL, header)
+	if err != nil {
+		if resp != nil {
+			if resp.StatusCode == http.StatusUnauthorized {
+				data, err := io.ReadAll(resp.Body)
+				if err == nil {
+					return nil, errors.New(string(data))
+				}
+			} else {
+				return nil, fmt.Errorf("%w (Status: %s)", err, resp.Status)
+			}
+		}
+		return nil, err
+	}
+
+	return conn, nil
+}
