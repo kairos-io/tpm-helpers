@@ -36,7 +36,7 @@ type PCRValues struct {
 // AttestationData is used to generate challanges from EKs
 type AttestationData struct {
 	EK       []byte     `json:"ek"`
-	AK       []byte     `json:"ak"`                      // Raw AK public key bytes
+	AK       []byte     `json:"ak"`                  // Raw AK public key bytes
 	PCRs     *PCRValues `json:"pcrs,omitempty"`      // PCR measurements for boot state verification
 	PCRQuote []byte     `json:"pcr_quote,omitempty"` // TPM-signed quote of PCR values
 	Nonce    []byte     `json:"nonce,omitempty"`     // Server-provided nonce for freshness

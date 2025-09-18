@@ -363,9 +363,9 @@ func (m *AKManager) GetChallengeRequest() (*ChallengeRequest, error) {
 	}
 
 	return &ChallengeRequest{
-		EK:   ekBytes,                // Needed for challenge encryption
-		AK:   akInfo.PublicKeyBytes,  // Raw AK public key bytes for challenge binding
-		PCRs: pcrValues,              // Needed for enrollment/verification (but not challenge generation)
+		EK:   ekBytes,               // Needed for challenge encryption
+		AK:   akInfo.PublicKeyBytes, // Raw AK public key bytes for challenge binding
+		PCRs: pcrValues,             // Needed for enrollment/verification (but not challenge generation)
 	}, nil
 }
 
