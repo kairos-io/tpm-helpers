@@ -19,6 +19,9 @@ type config struct {
 	headers map[string]string
 
 	systemfallback bool
+
+	// AK management fields
+	akHandleFile string
 }
 
 func newConfig() *config {

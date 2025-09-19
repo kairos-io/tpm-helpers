@@ -15,26 +15,6 @@ import (
 	"github.com/pkg/errors"
 )
 
-// GetAuthToken generates an authentication token from the host TPM.
-// It will return the token as a string and the generated AK that should
-// be saved by the caller for later Authentication.
-func GetAuthToken(opts ...Option) (string, []byte, error) {
-	c := newConfig()
-	c.apply(opts...) //nolint:errcheck // Config validation happens later
-
-	attestationData, akBytes, err := getAttestationData(c)
-	if err != nil {
-		return "", nil, err
-	}
-
-	token, err := getToken(attestationData)
-	if err != nil {
-		return "", nil, err
-	}
-
-	return token, akBytes, err
-}
-
 // Authenticate will read from the passed channel, expecting a challenge from the
 // attestation server, will compute a challenge response via the TPM using the passed
 // Attestation Key (AK) and will send it back to the attestation server.
@@ -59,32 +39,6 @@ func Authenticate(akBytes []byte, channel io.ReadWriter, opts ...Option) error {
 	return nil
 }
 
-// AuthRequest handles TPM-based authentication for WebSocket connections.
-// It extracts the authorization token from the HTTP request, generates a challenge,
-// and validates the TPM-generated response to authenticate the client.
-func AuthRequest(r *http.Request, conn *websocket.Conn) error {
-	token := r.Header.Get("Authorization")
-	ek, at, err := GetAttestationData(token)
-	if err != nil {
-		return err
-	}
-	secret, challenge, err := GenerateChallenge(ek, at)
-	if err != nil {
-		return err
-	}
-
-	resp, err := writeRead(conn, challenge)
-	if err != nil {
-		return err
-	}
-
-	if err := ValidateChallenge(secret, resp); err != nil {
-		return fmt.Errorf("error validating challenge: %w (response: %s)", err, string(resp))
-	}
-
-	return nil
-}
-
 func writeRead(conn *websocket.Conn, input []byte) ([]byte, error) {
 	writer, err := conn.NextWriter(websocket.BinaryMessage)
 	if err != nil {
@@ -103,26 +57,32 @@ func writeRead(conn *websocket.Conn, input []byte) ([]byte, error) {
 	return io.ReadAll(reader)
 }
 
-// Get retrieves a message from a remote ws server after
-// a successfully process of the TPM challenge
-func Get(url string, opts ...Option) ([]byte, error) {
-	conn, err := Connection(url, opts...)
+func getChallengeResponse(c *config, ec *attest.EncryptedCredential, aikBytes []byte) (*ChallengeResponse, error) {
+	tpm, err := getTPM(c)
+	if err != nil {
+		return nil, fmt.Errorf("opening tpm: %w", err)
+	}
+	defer tpm.Close() //nolint:errcheck // Cleanup operation //nolint:errcheck // Cleanup operation
+
+	aik, err := tpm.LoadAK(aikBytes)
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Close() //nolint:errcheck // Cleanup operation //nolint:errcheck // Cleanup operation
+	defer aik.Close(tpm) //nolint:errcheck // Cleanup operation
 
-	_, msg, err := conn.NextReader()
+	secret, err := aik.ActivateCredential(tpm, *ec)
 	if err != nil {
-		return nil, fmt.Errorf("reading payload from tpm get: %w", err)
+		return nil, fmt.Errorf("failed to activate credential: %w", err)
 	}
-
-	return io.ReadAll(msg)
+	return &ChallengeResponse{
+		Secret: secret,
+	}, nil
 }
 
-// Connection returns a connection to the endpoint which suathenticated already.
-// The server side needs to call AuthRequest on the http request in order to authenticate and refuse connections
-func Connection(url string, opts ...Option) (*websocket.Conn, error) {
+// AttestationConnection returns a simple WebSocket connection for the new TPM attestation flow.
+// Unlike Connection(), this function does not perform any authentication handshake - it just
+// establishes the WebSocket connection and returns it for the caller to manage the protocol.
+func AttestationConnection(url string, opts ...Option) (*websocket.Conn, error) {
 	c := newConfig()
 	c.apply(opts...) //nolint:errcheck // Config validation happens later
 
@@ -152,28 +112,12 @@ func Connection(url string, opts ...Option) (*websocket.Conn, error) {
 		}
 	}
 
-	attestationData, aikBytes, err := getAttestationData(c)
-	if err != nil {
-		return nil, err
-	}
-
-	// hash, err := GetPubHash(opts...)
-	// if err != nil {
-	// 	return nil, err
-	// }
-
-	token, err := getToken(attestationData)
-	if err != nil {
-		return nil, err
-	}
-
-	header.Add("Authorization", token)
+	// Add any additional headers
 	for k, v := range c.headers {
 		header.Add(k, v)
 	}
 
 	wsURL := strings.Replace(url, "http", "ws", 1)
-	//logrus.Infof("Using TPMHash %s to dial %s", hash, wsURL)
 	conn, resp, err := dialer.Dial(wsURL, header)
 	if err != nil {
 		if resp != nil {
@@ -189,53 +133,5 @@ func Connection(url string, opts ...Option) (*websocket.Conn, error) {
 		return nil, err
 	}
 
-	_, msg, err := conn.NextReader()
-	if err != nil {
-		return nil, fmt.Errorf("reading challenge: %w", err)
-	}
-
-	var challenge Challenge
-	if err := json.NewDecoder(msg).Decode(&challenge); err != nil {
-		return nil, fmt.Errorf("unmarshaling Challenge: %w", err)
-	}
-
-	challengeResp, err := getChallengeResponse(c, challenge.EC, aikBytes)
-	if err != nil {
-		return nil, err
-	}
-
-	writer, err := conn.NextWriter(websocket.BinaryMessage)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := json.NewEncoder(writer).Encode(challengeResp); err != nil {
-		return nil, fmt.Errorf("encoding ChallengeResponse: %w", err)
-	}
-
-	writer.Close() //nolint:errcheck // Cleanup operation
-
 	return conn, nil
-}
-
-func getChallengeResponse(c *config, ec *attest.EncryptedCredential, aikBytes []byte) (*ChallengeResponse, error) {
-	tpm, err := getTPM(c)
-	if err != nil {
-		return nil, fmt.Errorf("opening tpm: %w", err)
-	}
-	defer tpm.Close() //nolint:errcheck // Cleanup operation //nolint:errcheck // Cleanup operation
-
-	aik, err := tpm.LoadAK(aikBytes)
-	if err != nil {
-		return nil, err
-	}
-	defer aik.Close(tpm) //nolint:errcheck // Cleanup operation
-
-	secret, err := aik.ActivateCredential(tpm, *ec)
-	if err != nil {
-		return nil, fmt.Errorf("failed to activate credential: %w", err)
-	}
-	return &ChallengeResponse{
-		Secret: secret,
-	}, nil
 }

@@ -17,6 +17,7 @@
 package tpm
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/pem"
 	"fmt"
@@ -25,22 +26,33 @@ import (
 	"github.com/google/go-attestation/attest"
 )
 
-// AttestationData is used to generate challanges from EKs
-type AttestationData struct {
-	EK []byte
-	AK *attest.AttestationParameters
+// PCRValues represents PCR measurements for attestation
+type PCRValues struct {
+	PCR0  []byte `json:"pcr0"`  // BIOS/UEFI measurements
+	PCR7  []byte `json:"pcr7"`  // Secure Boot state
+	PCR11 []byte `json:"pcr11"` // UKI measurements
 }
 
-// Challenge represent the struct returned from the ws server,
-// used to resolve the TPM challenge.
-type Challenge struct {
-	EC *attest.EncryptedCredential
-}
-
-// ChallengeResponse represent the struct returned to the ws server
-// as a challenge response.
+// ChallengeResponse represents the client's response to a challenge
 type ChallengeResponse struct {
-	Secret []byte
+	Secret []byte `json:"secret"` // Secret recovered from credential activation
+}
+
+// AttestationChallengeResponse represents the server's response containing challenge
+type AttestationChallengeResponse struct {
+	Challenge *attest.EncryptedCredential `json:"challenge"` // Credential activation challenge
+	Enrolled  bool                        `json:"enrolled"`  // True if this was a new enrollment
+}
+
+// ProofRequest represents the client's proof of TPM ownership
+type ProofRequest struct {
+	Secret   []byte `json:"secret"`    // Secret recovered by activating the credential
+	PCRQuote []byte `json:"pcr_quote"` // Fresh TPM quote for cryptographic proof
+}
+
+// ProofResponse represents the final response with the decryption passphrase
+type ProofResponse struct {
+	Passphrase []byte `json:"passphrase"` // The actual decryption passphrase
 }
 
 // DecodePubHash returns the public key from an attestation EK
@@ -79,4 +91,15 @@ func pubBytes(ek *attest.EK) ([]byte, error) {
 		return nil, fmt.Errorf("error marshaling ec public key: %v", err)
 	}
 	return data, nil
+}
+
+// GenerateNonce creates a cryptographically secure random nonce
+// for use in remote attestation to ensure freshness
+func GenerateNonce() ([]byte, error) {
+	nonce := make([]byte, 32) // 256-bit nonce
+	_, err := rand.Read(nonce)
+	if err != nil {
+		return nil, fmt.Errorf("generating nonce: %w", err)
+	}
+	return nonce, nil
 }
