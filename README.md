@@ -41,6 +41,10 @@ akPublicKey, err := akManager.GetOrCreateAK()
 if err != nil {
     return fmt.Errorf("getting/creating AK: %w", err)
 }
+
+// Note: If AK file is corrupted, GetOrCreateAK() will return an error
+// asking for manual intervention rather than automatically deleting the file.
+// This prevents accidental removal of enrolled server-side data.
 ```
 
 #### 2. WebSocket Attestation Flow
@@ -49,7 +53,8 @@ if err != nil {
 import "github.com/gorilla/websocket"
 
 // Step 1: Connect to KMS WebSocket endpoint
-conn, err := websocket.Dial("wss://kms.example.com/attestation", nil)
+// Use AttestationConnection for simple WebSocket connections
+conn, err := tpm.AttestationConnection("wss://kms.example.com/attestation")
 if err != nil {
     return fmt.Errorf("connecting to KMS: %w", err)
 }
@@ -82,7 +87,7 @@ func RequestDecryptionPassphraseWebSocket() ([]byte, error) {
     }
     
     // Connect to KMS WebSocket endpoint
-    conn, err := websocket.Dial("wss://kms.example.com/attestation", nil)
+    conn, err := tpm.AttestationConnection("wss://kms.example.com/attestation")
     if err != nil {
         return nil, err
     }
@@ -364,6 +369,29 @@ The WebSocket approach provides inherent security against replay attacks without
 - **Natural Security**: WebSocket protocol provides session binding
 - **Cleaner Architecture**: Single connection handles entire flow
 - **Reduced Attack Surface**: Fewer moving parts means fewer vulnerabilities
+
+### Error Handling and Corrupted Files
+
+#### AK File Corruption
+If an AK blob file becomes corrupted, `GetOrCreateAK()` will return descriptive errors rather than automatically deleting the file:
+
+- **Empty files (0 bytes)**: Returns error asking user to manually remove the file
+- **Suspiciously small files (<50 bytes)**: Returns error suggesting potential corruption  
+- **JSON parsing failures**: Returns error indicating corruption or version mismatch
+
+**Important**: The library will NOT automatically remove corrupted AK files because they may represent data that is enrolled on the server side. Manual intervention ensures users can assess the situation before taking destructive actions.
+
+#### Example Error Messages
+```
+AK blob file exists but is empty (0 bytes) - this indicates corruption. 
+Please remove the file manually and retry: /etc/kairos/ak.blob
+
+AK blob file is suspiciously small (15 bytes) - this may indicate corruption. 
+Please verify the file or remove it manually and retry: /etc/kairos/ak.blob
+
+failed to load existing AK blob file (this may indicate corruption or version mismatch). 
+Please verify the file or remove it manually and retry. File: /etc/kairos/ak.blob
+```
 
 ### PCR Measurements
 
