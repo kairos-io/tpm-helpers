@@ -67,11 +67,25 @@ func NewAKManager(opts ...Option) (*AKManager, error) {
 func (m *AKManager) GetOrCreateAK() ([]byte, error) {
 	// Check if AK blob file already exists
 	if m.akExists() {
+		// Check file size and basic info
+		if stat, err := os.Stat(m.akBlobFile); err == nil {
+			// If file is empty, it's likely corrupted - return error for manual intervention
+			if stat.Size() == 0 {
+				return nil, fmt.Errorf("AK blob file exists but is empty (0 bytes) - this indicates corruption. Please remove the file manually and retry: %s", m.akBlobFile)
+			}
+
+			// If file is suspiciously small, it might be corrupted - return error for manual intervention
+			if stat.Size() < 50 {
+				return nil, fmt.Errorf("AK blob file is suspiciously small (%d bytes) - this may indicate corruption. Please verify the file or remove it manually and retry: %s", stat.Size(), m.akBlobFile)
+			}
+		}
+
 		// Load existing AK and return public key
 		akInfo, err := m.LoadAK()
 		if err != nil {
-			return nil, fmt.Errorf("loading existing AK: %w", err)
+			return nil, fmt.Errorf("failed to load existing AK blob file (this may indicate corruption or version mismatch). Please verify the file or remove it manually and retry. File: %s, Error: %w", m.akBlobFile, err)
 		}
+
 		return akInfo.PublicKeyBytes, nil
 	}
 
@@ -210,6 +224,11 @@ func (m *AKManager) LoadAK() (*AKInfo, error) {
 	blob, err := m.loadAKBlob()
 	if err != nil {
 		return nil, fmt.Errorf("loading AK blob: %w", err)
+	}
+
+	// Check if AttestationParams is empty
+	if len(blob.AttestationParams) == 0 {
+		return nil, fmt.Errorf("AttestationParams field is empty in AK blob")
 	}
 
 	// Deserialize the AttestationParameters
