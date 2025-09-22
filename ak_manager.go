@@ -292,7 +292,8 @@ func (m *AKManager) CreateProofRequest(challengeResp *AttestationChallengeRespon
 	}
 
 	// Generate a fresh PCR quote for cryptographic proof
-	quote, err := m.generatePCRQuote()
+	// Use PCRs 0, 7, 11 for boot integrity verification by default
+	quote, err := m.generatePCRQuote(0, 7, 11)
 	if err != nil {
 		return nil, fmt.Errorf("generating quote: %w", err)
 	}
@@ -367,8 +368,19 @@ func (m *AKManager) readPCRValues() (*PCRValues, error) {
 	}, nil
 }
 
-// generatePCRQuote generates a TPM quote (signed attestation) of PCR values using the AK
-func (m *AKManager) generatePCRQuote() ([]byte, error) {
+// generatePCRQuote generates a TPM quote (signed attestation) of specified PCR values using the AK
+// pcrs: variadic list of PCR indices to include in the quote (e.g., 0, 7, 11)
+func (m *AKManager) generatePCRQuote(pcrs ...int) ([]byte, error) {
+	// Validate PCR arguments
+	if len(pcrs) == 0 {
+		return nil, fmt.Errorf("at least one PCR index must be specified")
+	}
+
+	for _, pcr := range pcrs {
+		if pcr < 0 || pcr > 23 {
+			return nil, fmt.Errorf("PCR index %d is out of range (0-23)", pcr)
+		}
+	}
 	// Open TPM using go-attestation
 	tpm, err := getTPM(m.config)
 	if err != nil {
@@ -388,24 +400,60 @@ func (m *AKManager) generatePCRQuote() ([]byte, error) {
 	}
 	defer ak.Close(tpm) //nolint:errcheck
 
-	// Generate platform attestation with PCR values
-	// NOTE: go-attestation's Quote method hardcodes ALL 24 PCRs (0-23) in the selection
-	// See: https://github.com/google/go-attestation/blob/main/attest/tpm.go#L359-L363
-	// The quote20 function does: for pcr := 0; pcr < 24; pcr++ { sel.PCRs = append(sel.PCRs, pcr) }
-	// AttestPlatform provides the same PCR coverage with additional platform metadata
-	quote, err := tpm.AttestPlatform(ak, nil, &attest.PlatformAttestConfig{})
+	// Generate TPM quote with explicit PCR selection using modern go-attestation v0.5.1+ API
+	// Use QuotePCRs to select the specified PCRs for attestation
+	nonce := make([]byte, 20) // 20-byte nonce for quote freshness
+	quote, err := ak.QuotePCRs(tpm, nonce, attest.HashSHA256, pcrs)
 	if err != nil {
 		return nil, fmt.Errorf("generating PCR quote: %w", err)
 	}
 
-	// Encode the platform parameters for transmission
-	// This includes quotes AND PCR values
-	platformBytes, err := json.Marshal(quote)
+	// The Quote struct only contains the quote data, but we need PCR values too
+	// Read all PCR values from the TPM
+	allPCRs, err := tpm.PCRs(attest.HashSHA256)
 	if err != nil {
-		return nil, fmt.Errorf("marshaling platform parameters: %w", err)
+		return nil, fmt.Errorf("reading PCRs: %w", err)
 	}
 
-	return platformBytes, nil
+	// Extract only the requested PCR values
+	selectedPCRValues := make(map[int][]byte)
+	for _, pcrIndex := range pcrs {
+		if pcrIndex < len(allPCRs) {
+			selectedPCRValues[pcrIndex] = allPCRs[pcrIndex].Digest
+		}
+	}
+
+	// Create a structure that includes both the quote and PCR values
+	// This is flexible for any number of PCRs
+	quoteData := struct {
+		Quote struct {
+			Version   string `json:"version"`
+			Quote     []byte `json:"quote"`
+			Signature []byte `json:"signature"`
+		} `json:"quote"`
+		PCRs     map[int][]byte `json:"pcrs"`
+		Selected []int          `json:"selected_pcrs"`
+	}{
+		Quote: struct {
+			Version   string `json:"version"`
+			Quote     []byte `json:"quote"`
+			Signature []byte `json:"signature"`
+		}{
+			Version:   fmt.Sprintf("%d", quote.Version),
+			Quote:     quote.Quote,
+			Signature: quote.Signature,
+		},
+		PCRs:     selectedPCRValues,
+		Selected: pcrs,
+	}
+
+	// Encode the complete quote data for transmission
+	quoteBytes, err := json.Marshal(quoteData)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling quote data: %w", err)
+	}
+
+	return quoteBytes, nil
 }
 
 // publicKeyFromTPMTPublic converts a TPMTPublic to crypto.PublicKey

@@ -13,6 +13,8 @@ github.com/google/certificate-transparency-go v1.1.4 h1:hCyXHDbtqlr/lMXU0D4Wgbal
 github.com/google/certificate-transparency-go v1.1.4/go.mod h1:D6lvbfwckhNrbM9WVl1EVeMOyzC19mpIjMOI4nxBHtQ=
 github.com/google/go-attestation v0.5.0 h1:jXtAWT2sw2Yu8mYU0BC7FDidR+ngxFPSE+pl6IUu3/0=
 github.com/google/go-attestation v0.5.0/go.mod h1:0Tik9y3rzV649Jcr7evbljQHQAsIlJucyqQjYDBqktU=
+github.com/google/go-attestation v0.5.1 h1:jqtOrLk5MNdliTKjPbIPrAaRKJaKW+0LIU2n/brJYms=
+github.com/google/go-attestation v0.5.1/go.mod h1:KqGatdUhg5kPFkokyzSBDxwSCFyRgIgtRkMp6c3lOBQ=
 github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
 github.com/google/go-cmp v0.7.0/go.mod h1:pXiqmnSA92OHEEa9HXL2W4E7lf9JzCmGVUdgjX3N/iU=
 github.com/google/go-configfs-tsm v0.2.2 h1:YnJ9rXIOj5BYD7/0DNnzs8AOp7UcvjfTvt215EWcs98=

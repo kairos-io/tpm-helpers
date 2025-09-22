@@ -6,7 +6,7 @@ toolchain go1.24
 
 require (
 	github.com/google/certificate-transparency-go v1.1.4
-	github.com/google/go-attestation v0.5.0
+	github.com/google/go-attestation v0.5.1
 	github.com/google/go-tpm v0.9.1
 	github.com/google/go-tpm-tools v0.4.4
 	github.com/gorilla/websocket v1.5.0
