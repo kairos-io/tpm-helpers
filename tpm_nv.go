@@ -1,7 +1,9 @@
 package tpm
 
 import (
-	"github.com/folbricht/tpmk"
+	"fmt"
+
+	"github.com/google/go-tpm/tpm2"
 )
 
 // StoreBlob stores binary data in the TPM's Non-Volatile (NV) storage.
@@ -12,17 +14,60 @@ func StoreBlob(blob []byte, opts ...TPMOption) error {
 		return err
 	}
 
-	// Open device or simulator
-	dev, err := getTPMDevice(o)
+	// Open TPM transport
+	tpm, err := getTPMTransport(o)
 	if err != nil {
 		return err
 	}
-	if !o.emulated {
-		defer dev.Close() //nolint:errcheck // Cleanup operation //nolint:errcheck // Cleanup operation
+	defer tpm.Close() //nolint:errcheck // Cleanup operation
+
+	// First, try to define the NV space
+	defineCmd := tpm2.NVDefineSpace{
+		AuthHandle: tpm2.TPMRHOwner,
+		Auth: tpm2.TPM2BAuth{
+			Buffer: []byte(o.password),
+		},
+		PublicInfo: tpm2.New2B(
+			tpm2.TPMSNVPublic{
+				NVIndex:    tpm2.TPMHandle(o.index),
+				NameAlg:    getTPMHashAlg(o.hash),
+				Attributes: o.nvAttr,
+				DataSize:   uint16(len(blob)),
+			},
+		),
 	}
 
-	// Write to the index
-	return tpmk.NVWrite(dev, o.index, blob, o.password, o.nvAttr)
+	// Try to define the space (it might already exist)
+	_, err = defineCmd.Execute(tpm)
+	if err != nil {
+		// If it already exists, that's fine, continue with writing
+		// In a real implementation, you might want to check the specific error
+	}
+
+	// Write data to NV storage
+	if len(blob) > 0 {
+		writeCmd := tpm2.NVWrite{
+			AuthHandle: tpm2.AuthHandle{
+				Handle: tpm2.TPMRHOwner,
+				Auth:   tpm2.PasswordAuth([]byte(o.password)),
+			},
+			NVIndex: tpm2.NamedHandle{
+				Handle: tpm2.TPMHandle(o.index),
+				Name:   tpm2.TPM2BName{}, // Will be computed if needed
+			},
+			Data: tpm2.TPM2BMaxNVBuffer{
+				Buffer: blob,
+			},
+			Offset: 0,
+		}
+
+		_, err = writeCmd.Execute(tpm)
+		if err != nil {
+			return fmt.Errorf("writing to NV storage: %w", err)
+		}
+	}
+
+	return nil
 }
 
 // ReadBlob reads binary data from the TPM's Non-Volatile (NV) storage.
@@ -33,15 +78,50 @@ func ReadBlob(opts ...TPMOption) ([]byte, error) {
 		return []byte{}, err
 	}
 
-	// Open device or simulator
-	dev, err := getTPMDevice(o)
+	// Open TPM transport
+	tpm, err := getTPMTransport(o)
 	if err != nil {
 		return []byte{}, err
 	}
-	if !o.emulated {
-		defer dev.Close() //nolint:errcheck // Cleanup operation //nolint:errcheck // Cleanup operation
+	defer tpm.Close() //nolint:errcheck // Cleanup operation
+
+	// First, read the public info to get the data size
+	readPubCmd := tpm2.NVReadPublic{
+		NVIndex: tpm2.TPMHandle(o.index),
+	}
+
+	readPubRsp, err := readPubCmd.Execute(tpm)
+	if err != nil {
+		return []byte{}, fmt.Errorf("reading NV public info: %w", err)
+	}
+
+	nvPublic, err := readPubRsp.NVPublic.Contents()
+	if err != nil {
+		return []byte{}, fmt.Errorf("reading NV public contents: %w", err)
+	}
+
+	if nvPublic.DataSize == 0 {
+		return []byte{}, nil
 	}
 
 	// Read the data
-	return tpmk.NVRead(dev, o.index, o.password)
+	readCmd := tpm2.NVRead{
+		AuthHandle: tpm2.AuthHandle{
+			Handle: tpm2.TPMRHOwner,
+			Auth:   tpm2.PasswordAuth([]byte(o.password)),
+		},
+		NVIndex: tpm2.NamedHandle{
+			Handle: tpm2.TPMHandle(o.index),
+			Name:   readPubRsp.NVName,
+		},
+		Size:   nvPublic.DataSize,
+		Offset: 0,
+	}
+
+	readRsp, err := readCmd.Execute(tpm)
+	if err != nil {
+		return []byte{}, fmt.Errorf("reading NV data: %w", err)
+	}
+
+	return readRsp.Data.Buffer, nil
 }

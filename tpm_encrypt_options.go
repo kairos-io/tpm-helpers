@@ -3,13 +3,12 @@ package tpm
 import (
 	"crypto"
 	"fmt"
-	"io"
 	"strconv"
 	"strings"
 
-	"github.com/folbricht/tpmk"
-	"github.com/google/go-tpm-tools/simulator"
 	"github.com/google/go-tpm/tpm2"
+	"github.com/google/go-tpm/tpm2/transport"
+	"github.com/google/go-tpm/tpm2/transport/simulator"
 	"github.com/google/go-tpm/tpmutil"
 )
 
@@ -20,39 +19,68 @@ import (
 type TPMOptions struct {
 	device   string
 	index    tpmutil.Handle
-	keyAttr  tpm2.KeyProp
-	nvAttr   tpm2.NVAttr
+	keyAttr  tpm2.TPMAObject
+	nvAttr   tpm2.TPMANV
 	password string
 	emulated bool
 
 	hash crypto.Hash
 }
 
-var emulatedDevice io.ReadWriteCloser
+var emulatedDevice transport.TPMCloser
 
 // CloseEmulatedDevice closes the global emulated TPM device and resets it to nil.
 // This is used for cleanup when using the TPM simulator.
 func CloseEmulatedDevice() {
-	emulatedDevice.Close() //nolint:errcheck // Cleanup operation
-	emulatedDevice = nil
+	if emulatedDevice != nil {
+		emulatedDevice.Close() //nolint:errcheck // Cleanup operation
+		emulatedDevice = nil
+	}
 }
 
-func getTPMDevice(o *TPMOptions) (io.ReadWriteCloser, error) {
+// TPMTransportWrapper wraps a TPM transport with information about whether it should be closed
+type TPMTransportWrapper struct {
+	transport.TPM
+	shouldClose bool
+}
+
+// Close closes the transport only if it should be closed (not shared)
+func (w *TPMTransportWrapper) Close() error {
+	if w.shouldClose {
+		if closer, ok := w.TPM.(transport.TPMCloser); ok {
+			return closer.Close()
+		}
+	}
+	return nil
+}
+
+func getTPMTransport(o *TPMOptions) (*TPMTransportWrapper, error) {
 	if o.emulated {
 		if emulatedDevice == nil {
 			var err error
-			emulatedDevice, err = simulator.Get()
+			emulatedDevice, err = simulator.OpenSimulator()
 			if err != nil {
 				return nil, err
 			}
 		}
-		return emulatedDevice, nil
+		return &TPMTransportWrapper{
+			TPM:         emulatedDevice,
+			shouldClose: false, // Don't close shared emulated device
+		}, nil
 	}
-	dev, err := tpmk.OpenDevice(o.device)
+	tpm, err := transport.OpenTPM(o.device)
 	if err != nil {
-		return dev, err
+		return nil, err
 	}
-	return dev, err
+	return &TPMTransportWrapper{
+		TPM:         tpm,
+		shouldClose: true, // Close real devices
+	}, nil
+}
+
+// getTPMDevice is an alias for getTPMTransport for backward compatibility
+func getTPMDevice(o *TPMOptions) (*TPMTransportWrapper, error) {
+	return getTPMTransport(o)
 }
 
 // DefaultTPMOption creates a new TPMOptions struct with sensible defaults
@@ -151,30 +179,30 @@ func parseHandle(s string) (tpmutil.Handle, error) {
 	return tpmutil.Handle(i), err
 }
 
-func parseNVAttributes(s string) (tpm2.NVAttr, error) {
-	var nvAttr tpm2.NVAttr
+func parseNVAttributes(s string) (tpm2.TPMANV, error) {
+	var nvAttr tpm2.TPMANV
 	s = strings.ReplaceAll(s, " ", "")
 	for _, prop := range strings.Split(s, "|") {
-		v, ok := stringToNVAttribute[prop]
+		updater, ok := stringToNVAttribute[prop]
 		if !ok {
 			return nvAttr, fmt.Errorf("unknown attribute '%s'", prop)
 		}
-		nvAttr |= v
+		updater(&nvAttr)
 	}
 
 	return nvAttr, nil
 }
 
-func parseKeyAttributes(s string) (tpm2.KeyProp, error) {
-	var keyProp tpm2.KeyProp
+func parseKeyAttributes(s string) (tpm2.TPMAObject, error) {
+	var keyAttr tpm2.TPMAObject
 	s = strings.ReplaceAll(s, " ", "")
 	for _, prop := range strings.Split(s, "|") {
-		v, ok := stringToKeyAttribute[prop]
+		updater, ok := stringToKeyAttribute[prop]
 		if !ok {
-			return keyProp, fmt.Errorf("unknown attribute property '%s'", prop)
+			return keyAttr, fmt.Errorf("unknown attribute property '%s'", prop)
 		}
-		keyProp |= v
+		updater(&keyAttr)
 	}
 
-	return keyProp, nil
+	return keyAttr, nil
 }

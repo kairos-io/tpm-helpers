@@ -2,8 +2,12 @@ package tpm
 
 import (
 	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rsa"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 
@@ -122,12 +126,13 @@ func (m *AKManager) GetAKPublicKey() (crypto.PublicKey, error) {
 
 	// Get the public key from the AK's attestation parameters
 	params := ak.AttestationParameters()
-	pub, err := tpm2.DecodePublic(params.Public)
+	pub, err := tpm2.Unmarshal[tpm2.TPMTPublic](params.Public)
 	if err != nil {
-		return nil, fmt.Errorf("decoding public key: %w", err)
+		return nil, fmt.Errorf("unmarshaling public key: %w", err)
 	}
 
-	return pub.Key()
+	// Convert TPMTPublic to crypto.PublicKey
+	return publicKeyFromTPMTPublic(pub)
 }
 
 // ReadAKInfo reads AK information by loading from blob
@@ -383,17 +388,83 @@ func (m *AKManager) generatePCRQuote() ([]byte, error) {
 	}
 	defer ak.Close(tpm) //nolint:errcheck
 
-	// Generate quote using go-attestation with empty qualifying data
-	quote, err := ak.Quote(tpm, nil, attest.HashSHA256)
+	// Generate platform attestation with PCR values
+	// NOTE: go-attestation's Quote method hardcodes ALL 24 PCRs (0-23) in the selection
+	// See: https://github.com/google/go-attestation/blob/main/attest/tpm.go#L359-L363
+	// The quote20 function does: for pcr := 0; pcr < 24; pcr++ { sel.PCRs = append(sel.PCRs, pcr) }
+	// AttestPlatform provides the same PCR coverage with additional platform metadata
+	quote, err := tpm.AttestPlatform(ak, nil, &attest.PlatformAttestConfig{})
 	if err != nil {
 		return nil, fmt.Errorf("generating PCR quote: %w", err)
 	}
 
-	// Encode the quote for transmission
-	quoteBytes, err := json.Marshal(quote)
+	// Encode the platform parameters for transmission
+	// This includes quotes AND PCR values
+	platformBytes, err := json.Marshal(quote)
 	if err != nil {
-		return nil, fmt.Errorf("marshaling quote: %w", err)
+		return nil, fmt.Errorf("marshaling platform parameters: %w", err)
 	}
 
-	return quoteBytes, nil
+	return platformBytes, nil
+}
+
+// publicKeyFromTPMTPublic converts a TPMTPublic to crypto.PublicKey
+func publicKeyFromTPMTPublic(pub *tpm2.TPMTPublic) (crypto.PublicKey, error) {
+	switch pub.Type {
+	case tpm2.TPMAlgRSA:
+		rsaDetail, err := pub.Parameters.RSADetail()
+		if err != nil {
+			return nil, fmt.Errorf("reading RSA parameters: %w", err)
+		}
+
+		rsaUnique, err := pub.Unique.RSA()
+		if err != nil {
+			return nil, fmt.Errorf("reading RSA unique: %w", err)
+		}
+
+		publicKey := &rsa.PublicKey{
+			N: new(big.Int).SetBytes(rsaUnique.Buffer),
+			E: int(rsaDetail.Exponent),
+		}
+		if publicKey.E == 0 {
+			publicKey.E = 65537 // Default RSA exponent
+		}
+
+		return publicKey, nil
+
+	case tpm2.TPMAlgECC:
+		eccDetail, err := pub.Parameters.ECCDetail()
+		if err != nil {
+			return nil, fmt.Errorf("reading ECC parameters: %w", err)
+		}
+
+		eccUnique, err := pub.Unique.ECC()
+		if err != nil {
+			return nil, fmt.Errorf("reading ECC unique: %w", err)
+		}
+
+		var curve elliptic.Curve
+		switch eccDetail.CurveID {
+		case tpm2.TPMECCNistP256:
+			curve = elliptic.P256()
+		case tpm2.TPMECCNistP384:
+			curve = elliptic.P384()
+		case tpm2.TPMECCNistP521:
+			curve = elliptic.P521()
+		default:
+			return nil, fmt.Errorf("unsupported ECC curve: %v", eccDetail.CurveID)
+		}
+
+		x := new(big.Int).SetBytes(eccUnique.X.Buffer)
+		y := new(big.Int).SetBytes(eccUnique.Y.Buffer)
+
+		return &ecdsa.PublicKey{
+			Curve: curve,
+			X:     x,
+			Y:     y,
+		}, nil
+
+	default:
+		return nil, fmt.Errorf("unsupported key type: %v", pub.Type)
+	}
 }
