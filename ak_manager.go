@@ -435,8 +435,7 @@ func (m *AKManager) generatePCRQuote(pcrs ...int) ([]byte, error) {
 			Quote     []byte `json:"quote"`
 			Signature []byte `json:"signature"`
 		} `json:"quote"`
-		PCRs     map[int][]byte `json:"pcrs"`
-		Selected []int          `json:"selected_pcrs"`
+		PCRs map[int][]byte `json:"pcrs"`
 	}{
 		Quote: struct {
 			Version   string `json:"version"`
@@ -447,8 +446,7 @@ func (m *AKManager) generatePCRQuote(pcrs ...int) ([]byte, error) {
 			Quote:     quote.Quote,
 			Signature: quote.Signature,
 		},
-		PCRs:     selectedPCRValues,
-		Selected: pcrs,
+		PCRs: selectedPCRValues,
 	}
 
 	// Encode the complete quote data for transmission
