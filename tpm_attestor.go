@@ -17,21 +17,20 @@
 package tpm
 
 import (
-	"crypto/rand"
 	"crypto/sha256"
-	"encoding/pem"
+	"crypto/tls"
+	stdx509 "crypto/x509"
 	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
 
 	"github.com/google/certificate-transparency-go/x509"
 	"github.com/google/go-attestation/attest"
+	"github.com/gorilla/websocket"
+	"github.com/pkg/errors"
 )
-
-// PCRValues represents PCR measurements for attestation
-type PCRValues struct {
-	PCR0  []byte `json:"pcr0"`  // BIOS/UEFI measurements
-	PCR7  []byte `json:"pcr7"`  // Secure Boot state
-	PCR11 []byte `json:"pcr11"` // UKI measurements
-}
 
 // ChallengeResponse represents the client's response to a challenge
 type ChallengeResponse struct {
@@ -66,25 +65,6 @@ func DecodePubHash(ek *attest.EK) (string, error) {
 	return hashEncoded, nil
 }
 
-func encodeEK(ek *attest.EK) ([]byte, error) {
-	if ek.Certificate != nil {
-		return pem.EncodeToMemory(&pem.Block{
-			Type:  "CERTIFICATE",
-			Bytes: ek.Certificate.Raw,
-		}), nil
-	}
-
-	data, err := pubBytes(ek)
-	if err != nil {
-		return nil, err
-	}
-
-	return pem.EncodeToMemory(&pem.Block{
-		Type:  "PUBLIC KEY",
-		Bytes: data,
-	}), nil
-}
-
 func pubBytes(ek *attest.EK) ([]byte, error) {
 	data, err := x509.MarshalPKIXPublicKey(ek.Public)
 	if err != nil {
@@ -93,13 +73,57 @@ func pubBytes(ek *attest.EK) ([]byte, error) {
 	return data, nil
 }
 
-// GenerateNonce creates a cryptographically secure random nonce
-// for use in remote attestation to ensure freshness
-func GenerateNonce() ([]byte, error) {
-	nonce := make([]byte, 32) // 256-bit nonce
-	_, err := rand.Read(nonce)
-	if err != nil {
-		return nil, fmt.Errorf("generating nonce: %w", err)
+// AttestationConnection returns a simple WebSocket connection for the new TPM attestation flow.
+func AttestationConnection(url string, opts ...Option) (*websocket.Conn, error) {
+	c := newConfig()
+	c.apply(opts...) //nolint:errcheck // Config validation happens later
+
+	header := c.header
+	if c.header == nil {
+		header = http.Header{}
 	}
-	return nonce, nil
+
+	dialer := websocket.DefaultDialer
+	if len(c.cacerts) > 0 {
+		pool := stdx509.NewCertPool()
+		if c.systemfallback {
+			systemPool, err := stdx509.SystemCertPool()
+			if err != nil {
+				return nil, err
+			}
+			pool = systemPool
+		}
+
+		pool.AppendCertsFromPEM(c.cacerts)
+		dialer = &websocket.Dialer{
+			Proxy:            http.ProxyFromEnvironment,
+			HandshakeTimeout: 45 * time.Second,
+			TLSClientConfig: &tls.Config{
+				RootCAs: pool,
+			},
+		}
+	}
+
+	// Add any additional headers
+	for k, v := range c.headers {
+		header.Add(k, v)
+	}
+
+	wsURL := strings.Replace(url, "http", "ws", 1)
+	conn, resp, err := dialer.Dial(wsURL, header)
+	if err != nil {
+		if resp != nil {
+			if resp.StatusCode == http.StatusUnauthorized {
+				data, err := io.ReadAll(resp.Body)
+				if err == nil {
+					return nil, errors.New(string(data))
+				}
+			} else {
+				return nil, fmt.Errorf("%w (Status: %s)", err, resp.Status)
+			}
+		}
+		return nil, err
+	}
+
+	return conn, nil
 }
