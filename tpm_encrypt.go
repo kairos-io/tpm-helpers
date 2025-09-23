@@ -101,10 +101,20 @@ func (k *TPMRSAPrivateKey) Decrypt(rand io.Reader, ciphertext []byte, opts crypt
 		}
 	}
 
+	// Get the name of the key for authorization
+	readPubCmd := tpm2.ReadPublic{
+		ObjectHandle: k.handle,
+	}
+	readPubRsp, err := readPubCmd.Execute(k.transport)
+	if err != nil {
+		return nil, fmt.Errorf("reading public key for name: %w", err)
+	}
+
 	// Perform TPM decryption
 	decryptCmd := tpm2.RSADecrypt{
 		KeyHandle: tpm2.AuthHandle{
 			Handle: k.handle,
+			Name:   readPubRsp.Name,
 			Auth:   tpm2.PasswordAuth([]byte(k.password)),
 		},
 		CipherText: tpm2.TPM2BPublicKeyRSA{

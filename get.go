@@ -80,8 +80,6 @@ func getChallengeResponse(c *config, ec *attest.EncryptedCredential, aikBytes []
 }
 
 // AttestationConnection returns a simple WebSocket connection for the new TPM attestation flow.
-// Unlike Connection(), this function does not perform any authentication handshake - it just
-// establishes the WebSocket connection and returns it for the caller to manage the protocol.
 func AttestationConnection(url string, opts ...Option) (*websocket.Conn, error) {
 	c := newConfig()
 	c.apply(opts...) //nolint:errcheck // Config validation happens later

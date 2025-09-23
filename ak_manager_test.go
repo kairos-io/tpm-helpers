@@ -52,11 +52,13 @@ var _ = Describe("AK Manager", func() {
 			info, err := manager.ReadAKInfo()
 			Expect(err).ToNot(HaveOccurred())
 			Expect(info.PublicKeyBytes).To(Equal(akBytes))
-			Expect(info.PublicKey).ToNot(BeNil())
-			Expect(info.Handle).ToNot(BeZero())
+			Expect(info.AttestationParams).ToNot(BeNil())
+			Expect(info.AKBytes).ToNot(BeEmpty())
 
-			// Clean up the loaded AK handle
-			manager.CloseAK(info.Handle) //nolint:errcheck
+			// Verify we can get the public key
+			pubKey, err := manager.GetAKPublicKey()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(pubKey).ToNot(BeNil())
 		})
 
 		It("should be idempotent - return same AK when called multiple times", func() {
@@ -97,8 +99,8 @@ var _ = Describe("AK Manager", func() {
 			// Should return error when trying to load corrupted file
 			_, err = corruptedManager.GetOrCreateAK()
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("loading existing AK"))
-			Expect(err.Error()).To(ContainSubstring("invalid character"))
+			// Since the file size check happens first, we'll get a size error instead of a JSON error
+			Expect(err.Error()).To(ContainSubstring("suspiciously small"))
 		})
 	})
 
