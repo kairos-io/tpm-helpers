@@ -49,7 +49,7 @@ var _ = Describe("AK Manager", func() {
 			Expect(handleFilePath).To(BeAnExistingFile())
 
 			// Verify we can load the AK and it has the expected public key bytes
-			info, err := manager.ReadAKInfo()
+			info, err := manager.LoadAK()
 			Expect(err).ToNot(HaveOccurred())
 			Expect(info.PublicKeyBytes).To(Equal(akBytes))
 			Expect(info.AttestationParams).ToNot(BeNil())
@@ -83,7 +83,7 @@ var _ = Describe("AK Manager", func() {
 			Expect(handleFilePath).ToNot(BeAnExistingFile())
 
 			// Verify AK is no longer accessible
-			_, err = manager.ReadAKInfo()
+			_, err = manager.LoadAK()
 			Expect(err).To(HaveOccurred())
 		})
 

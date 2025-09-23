@@ -135,11 +135,6 @@ func (m *AKManager) GetAKPublicKey() (crypto.PublicKey, error) {
 	return publicKeyFromTPMTPublic(pub)
 }
 
-// ReadAKInfo reads AK information by loading from blob
-func (m *AKManager) ReadAKInfo() (*AKInfo, error) {
-	return m.LoadAK()
-}
-
 // CleanupAK removes the AK blob file
 func (m *AKManager) CleanupAK() error {
 	// Remove the AK blob file
