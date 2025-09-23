@@ -30,17 +30,40 @@ var DefaultEKAuthPolicy = []byte{
 	0xF2, 0xA1, 0xDA, 0x1B, 0x33, 0x14, 0x69, 0xAA,
 }
 
-// AKBlob represents the AK data stored on disk
-type AKBlob struct {
+// akBlob represents the AK data stored on disk and provides controlled access to AK information.
+// The struct itself is unexported to prevent external direct access and maintain encapsulation,
+// but the fields are exported to enable JSON marshaling/unmarshaling for persistence.
+// External access is provided through controlled methods on AKManager.
+type akBlob struct {
 	AKBytes           []byte `json:"ak_bytes"`           // Marshaled go-attestation AK
 	AttestationParams []byte `json:"attestation_params"` // Serialized AttestationParameters from go-attestation
 }
 
-// AKInfo holds information about a loaded Attestation Key
-type AKInfo struct {
-	PublicKeyBytes    []byte                        // Raw AK public key bytes for transmission
-	AttestationParams *attest.AttestationParameters // Complete AttestationParameters from go-attestation
-	AKBytes           []byte                        // Marshaled AK for later loading
+// getAttestationParameters deserializes and returns the AttestationParameters
+func (b *akBlob) getAttestationParameters() (*attest.AttestationParameters, error) {
+	if len(b.AttestationParams) == 0 {
+		return nil, fmt.Errorf("AttestationParams field is empty in AK blob")
+	}
+
+	var params attest.AttestationParameters
+	if err := json.Unmarshal(b.AttestationParams, &params); err != nil {
+		return nil, fmt.Errorf("unmarshaling attestation parameters: %w", err)
+	}
+	return &params, nil
+}
+
+// getPublicKeyBytes returns the raw AK public key bytes for transmission
+func (b *akBlob) getPublicKeyBytes() ([]byte, error) {
+	params, err := b.getAttestationParameters()
+	if err != nil {
+		return nil, err
+	}
+	return params.Public, nil
+}
+
+// getAKBytes returns the marshaled AK bytes for later loading
+func (b *akBlob) getAKBytes() []byte {
+	return b.AKBytes
 }
 
 // AKManager manages Attestation Key lifecycle using blob storage
@@ -85,12 +108,17 @@ func (m *AKManager) GetOrCreateAK() ([]byte, error) {
 		}
 
 		// Load existing AK and return public key
-		akInfo, err := m.LoadAK()
+		akBlob, err := m.LoadAK()
 		if err != nil {
 			return nil, fmt.Errorf("failed to load existing AK blob file (this may indicate corruption or version mismatch). Please verify the file or remove it manually and retry. File: %s, Error: %w", m.akBlobFile, err)
 		}
 
-		return akInfo.PublicKeyBytes, nil
+		publicKeyBytes, err := akBlob.getPublicKeyBytes()
+		if err != nil {
+			return nil, fmt.Errorf("getting public key bytes: %w", err)
+		}
+
+		return publicKeyBytes, nil
 	}
 
 	// Create new AK
@@ -113,12 +141,12 @@ func (m *AKManager) GetAKPublicKey() (crypto.PublicKey, error) {
 	defer tpm.Close() //nolint:errcheck
 
 	// Load AK and get its public key
-	akInfo, err := m.LoadAK()
+	akBlob, err := m.LoadAK()
 	if err != nil {
 		return nil, fmt.Errorf("loading AK: %w", err)
 	}
 
-	ak, err := tpm.LoadAK(akInfo.AKBytes)
+	ak, err := tpm.LoadAK(akBlob.getAKBytes())
 	if err != nil {
 		return nil, fmt.Errorf("loading AK: %w", err)
 	}
@@ -170,10 +198,10 @@ func (m *AKManager) createAndStoreAK() ([]byte, error) {
 	}
 	defer ak.Close(tpm) //nolint:errcheck
 
-	// Get AttestationParameters (same as legacy flow)
+	// Get AttestationParameters
 	params := ak.AttestationParameters()
 
-	// Marshal the AK for storage (same as legacy flow)
+	// Marshal the AK for storage
 	akBytes, err := ak.Marshal()
 	if err != nil {
 		return nil, fmt.Errorf("marshaling AK: %w", err)
@@ -186,7 +214,7 @@ func (m *AKManager) createAndStoreAK() ([]byte, error) {
 	}
 
 	// Create the AK blob structure
-	akBlob := AKBlob{
+	akBlob := akBlob{
 		AKBytes:           akBytes,
 		AttestationParams: paramsBytes,
 	}
@@ -201,7 +229,7 @@ func (m *AKManager) createAndStoreAK() ([]byte, error) {
 }
 
 // saveAKBlob saves the AK blob to the configured file
-func (m *AKManager) saveAKBlob(blob *AKBlob) error {
+func (m *AKManager) saveAKBlob(blob *akBlob) error {
 	// Ensure directory exists
 	dir := filepath.Dir(m.akBlobFile)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -218,40 +246,43 @@ func (m *AKManager) saveAKBlob(blob *AKBlob) error {
 	return os.WriteFile(m.akBlobFile, data, 0600)
 }
 
-// LoadAK loads the AK from the blob file and deserializes the AttestationParameters
-func (m *AKManager) LoadAK() (*AKInfo, error) {
+// LoadAK loads the AK from the blob file
+func (m *AKManager) LoadAK() (*akBlob, error) {
 	// Load AK blob from file
 	blob, err := m.loadAKBlob()
 	if err != nil {
 		return nil, fmt.Errorf("loading AK blob: %w", err)
 	}
 
-	// Check if AttestationParams is empty
-	if len(blob.AttestationParams) == 0 {
-		return nil, fmt.Errorf("AttestationParams field is empty in AK blob")
-	}
+	return blob, nil
+}
 
-	// Deserialize the AttestationParameters
-	var params attest.AttestationParameters
-	if err := json.Unmarshal(blob.AttestationParams, &params); err != nil {
-		return nil, fmt.Errorf("unmarshaling attestation parameters: %w", err)
+// GetAKPublicKeyBytes returns the raw AK public key bytes (for testing)
+func (m *AKManager) GetAKPublicKeyBytes() ([]byte, error) {
+	akBlob, err := m.LoadAK()
+	if err != nil {
+		return nil, fmt.Errorf("loading AK: %w", err)
 	}
+	return akBlob.getPublicKeyBytes()
+}
 
-	return &AKInfo{
-		PublicKeyBytes:    params.Public, // Use the exact same bytes as legacy flow
-		AttestationParams: &params,       // Complete AttestationParameters for challenge generation
-		AKBytes:           blob.AKBytes,  // Marshaled AK for activation
-	}, nil
+// GetStoredAKBytes returns the marshaled AK bytes (for testing)
+func (m *AKManager) GetStoredAKBytes() ([]byte, error) {
+	akBlob, err := m.LoadAK()
+	if err != nil {
+		return nil, err
+	}
+	return akBlob.getAKBytes(), nil
 }
 
 // loadAKBlob loads the AK blob from the configured file
-func (m *AKManager) loadAKBlob() (*AKBlob, error) {
+func (m *AKManager) loadAKBlob() (*akBlob, error) {
 	data, err := os.ReadFile(m.akBlobFile)
 	if err != nil {
 		return nil, fmt.Errorf("reading AK blob file: %w", err)
 	}
 
-	var blob AKBlob
+	var blob akBlob
 	if err := json.Unmarshal(data, &blob); err != nil {
 		return nil, fmt.Errorf("unmarshaling AK blob: %w", err)
 	}
@@ -269,12 +300,17 @@ func (m *AKManager) GetAttestationData() (*attest.EK, *attest.AttestationParamet
 	}
 
 	// Get AK AttestationParameters from our persisted AK
-	akInfo, err := m.LoadAK()
+	akBlob, err := m.LoadAK()
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading AK: %w", err)
 	}
 
-	return ek, akInfo.AttestationParams, nil
+	attestationParams, err := akBlob.getAttestationParameters()
+	if err != nil {
+		return nil, nil, fmt.Errorf("getting attestation parameters: %w", err)
+	}
+
+	return ek, attestationParams, nil
 }
 
 // CreateProofRequest creates a proof request with the activated credential secret and quote
@@ -315,13 +351,13 @@ func (m *AKManager) ActivateCredential(challenge *Challenge) ([]byte, error) {
 	defer tpm.Close() //nolint:errcheck
 
 	// Load AK using go-attestation (same as legacy flow)
-	akInfo, err := m.LoadAK()
+	akBlob, err := m.LoadAK()
 	if err != nil {
 		return nil, fmt.Errorf("loading AK info: %w", err)
 	}
 
 	// Load the marshaled AK using go-attestation
-	ak, err := tpm.LoadAK(akInfo.AKBytes)
+	ak, err := tpm.LoadAK(akBlob.getAKBytes())
 	if err != nil {
 		return nil, fmt.Errorf("loading AK: %w", err)
 	}
@@ -384,12 +420,12 @@ func (m *AKManager) generatePCRQuote(pcrs ...int) ([]byte, error) {
 	defer tpm.Close() //nolint:errcheck
 
 	// Load AK using go-attestation
-	akInfo, err := m.LoadAK()
+	akBlob, err := m.LoadAK()
 	if err != nil {
 		return nil, fmt.Errorf("loading AK info: %w", err)
 	}
 
-	ak, err := tpm.LoadAK(akInfo.AKBytes)
+	ak, err := tpm.LoadAK(akBlob.getAKBytes())
 	if err != nil {
 		return nil, fmt.Errorf("loading AK: %w", err)
 	}

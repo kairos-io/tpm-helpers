@@ -49,11 +49,19 @@ var _ = Describe("AK Manager", func() {
 			Expect(handleFilePath).To(BeAnExistingFile())
 
 			// Verify we can load the AK and it has the expected public key bytes
-			info, err := manager.LoadAK()
+			publicKeyBytes, err := manager.GetAKPublicKeyBytes()
 			Expect(err).ToNot(HaveOccurred())
-			Expect(info.PublicKeyBytes).To(Equal(akBytes))
-			Expect(info.AttestationParams).ToNot(BeNil())
-			Expect(info.AKBytes).ToNot(BeEmpty())
+			Expect(publicKeyBytes).To(Equal(akBytes))
+
+			// Verify attestation data is accessible
+			_, attestationParams, err := manager.GetAttestationData()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(attestationParams).ToNot(BeNil())
+
+			// Verify AK bytes are stored
+			storedAKBytes, err := manager.GetStoredAKBytes()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(storedAKBytes).ToNot(BeEmpty())
 
 			// Verify we can get the public key
 			pubKey, err := manager.GetAKPublicKey()
