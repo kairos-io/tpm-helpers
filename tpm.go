@@ -17,21 +17,16 @@ import (
 // GenerateChallenge generates a challenge from attestation parameters and a public endorsed key
 // This is the main function that should be used with go-attestation's native types
 func GenerateChallenge(ek *attest.EK, akParams *attest.AttestationParameters) ([]byte, []byte, error) {
-	fmt.Printf("Debug: GenerateChallenge called with EK.Public type: %T, AK Public length: %d\n", ek.Public, len(akParams.Public))
-
 	ap := attest.ActivationParameters{
 		TPMVersion: attest.TPMVersion20,
 		EK:         ek.Public,
 		AK:         *akParams, // Use the AttestationParameters directly
 	}
 
-	fmt.Printf("Debug: About to call ap.Generate() with TPMVersion: %v\n", ap.TPMVersion)
 	secret, ec, err := ap.Generate()
 	if err != nil {
-		fmt.Printf("Debug: ap.Generate() failed with error: %v\n", err)
 		return nil, nil, fmt.Errorf("generating challenge: %w", err)
 	}
-	fmt.Printf("Debug: ap.Generate() succeeded, secret length: %d\n", len(secret))
 
 	challengeBytes, err := json.Marshal(Challenge{EC: ec})
 	if err != nil {
