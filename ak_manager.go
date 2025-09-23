@@ -372,33 +372,6 @@ func (m *AKManager) ActivateCredential(challenge *Challenge) ([]byte, error) {
 	return secret, nil
 }
 
-// readPCRValues reads PCR values 0, 7, and 11 from the TPM
-func (m *AKManager) readPCRValues() (*PCRValues, error) {
-	// Open TPM using go-attestation
-	tpm, err := getTPM(m.config)
-	if err != nil {
-		return nil, fmt.Errorf("opening TPM: %w", err)
-	}
-	defer tpm.Close() //nolint:errcheck
-
-	// Read PCRs using go-attestation
-	pcrs, err := tpm.PCRs(attest.HashSHA256)
-	if err != nil {
-		return nil, fmt.Errorf("reading PCRs: %w", err)
-	}
-
-	// Extract individual PCR values
-	if len(pcrs) <= 11 {
-		return nil, fmt.Errorf("insufficient PCRs available")
-	}
-
-	return &PCRValues{
-		PCR0:  pcrs[0].Digest,
-		PCR7:  pcrs[7].Digest,
-		PCR11: pcrs[11].Digest,
-	}, nil
-}
-
 // generatePCRQuote generates a TPM quote (signed attestation) of specified PCR values using the AK
 // pcrs: variadic list of PCR indices to include in the quote (e.g., 0, 7, 11)
 func (m *AKManager) generatePCRQuote(pcrs ...int) ([]byte, error) {
