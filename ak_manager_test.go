@@ -1,7 +1,10 @@
 package tpm_test
 
 import (
+	"crypto/ecdsa"
+	"crypto/rsa"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -293,20 +296,9 @@ var _ = Describe("AK Manager", func() {
 	})
 
 	Context("utility functions", func() {
-		It("should convert RSA TPMTPublic to crypto.PublicKey", func() {
-			// This test would require creating a TPMTPublic structure
-			// Since this is a utility function and creating valid TPMTPublic
-			// structures requires deep TPM knowledge, we'll test the error cases
-
-			// Test with unsupported key type
-			defer func() {
-				if r := recover(); r == nil {
-					// If no panic, the function handled the error gracefully
-				}
-			}()
-
-			// The actual conversion testing would need real TPM data
-			// which is complex to mock. The function is tested indirectly
+		It("should convert TPMTPublic to crypto.PublicKey through GetAKPublicKey", func() {
+			// Since publicKeyFromTPMTPublic is an internal function and creating valid
+			// TPMTPublic structures requires deep TPM knowledge, we test it indirectly
 			// through GetAKPublicKey which uses it internally.
 			manager, err := NewAKManager(Emulated, WithSeed(GinkgoRandomSeed()), WithAKHandleFile(handleFilePath))
 			Expect(err).ToNot(HaveOccurred())
@@ -318,6 +310,33 @@ var _ = Describe("AK Manager", func() {
 			pubKey, err := manager.GetAKPublicKey()
 			Expect(err).ToNot(HaveOccurred())
 			Expect(pubKey).ToNot(BeNil())
+
+			// Verify we get a valid crypto.PublicKey (RSA or ECDSA)
+			switch key := pubKey.(type) {
+			case *rsa.PublicKey:
+				// Validate RSA public key components
+				Expect(key.N).ToNot(BeNil(), "RSA modulus should not be nil")
+				Expect(key.N.Sign()).To(Equal(1), "RSA modulus should be positive")
+				Expect(key.N.BitLen()).To(BeNumerically(">=", 1024), "RSA key should be at least 1024 bits")
+				Expect(key.E).To(BeNumerically(">", 1), "RSA exponent should be > 1")
+				Expect(key.E).To(BeNumerically("<=", 1<<31-1), "RSA exponent should be reasonable")
+
+			case *ecdsa.PublicKey:
+				// Verify ECDSA public key is on the curve
+				Expect(key.Curve).ToNot(BeNil(), "ECDSA curve should not be nil")
+				Expect(key.X).ToNot(BeNil(), "ECDSA X coordinate should not be nil")
+				Expect(key.Y).ToNot(BeNil(), "ECDSA Y coordinate should not be nil")
+
+				// Verify the point is actually on the curve
+				Expect(key.Curve.IsOnCurve(key.X, key.Y)).To(BeTrue(), "ECDSA public key point should be on the curve")
+
+				// Verify it's not the point at infinity (X=0, Y=0)
+				Expect(key.X.Sign()).ToNot(Equal(0), "ECDSA X coordinate should not be zero")
+				Expect(key.Y.Sign()).ToNot(Equal(0), "ECDSA Y coordinate should not be zero")
+
+			default:
+				Fail(fmt.Sprintf("Expected RSA or ECDSA public key, got %T", pubKey))
+			}
 		})
 	})
 })
