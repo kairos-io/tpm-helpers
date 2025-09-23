@@ -78,11 +78,6 @@ func getTPMTransport(o *TPMOptions) (*TPMTransportWrapper, error) {
 	}, nil
 }
 
-// getTPMDevice is an alias for getTPMTransport for backward compatibility
-func getTPMDevice(o *TPMOptions) (*TPMTransportWrapper, error) {
-	return getTPMTransport(o)
-}
-
 // DefaultTPMOption creates a new TPMOptions struct with sensible defaults
 // and applies any provided options on top of the defaults.
 func DefaultTPMOption(opts ...TPMOption) (*TPMOptions, error) {

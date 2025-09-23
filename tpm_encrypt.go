@@ -27,7 +27,7 @@ type TPMRSAPrivateKey struct {
 func (k *TPMRSAPrivateKey) Public() crypto.PublicKey {
 	if k.publicKey == nil {
 		// Lazy load the public key
-		k.loadPublicKey()
+		_ = k.loadPublicKey() // Ignore error for lazy loading - key will be nil if it fails
 	}
 	return k.publicKey
 }

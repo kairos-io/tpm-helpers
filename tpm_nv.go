@@ -1,7 +1,9 @@
 package tpm
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/go-tpm/tpm2"
 )
@@ -37,11 +39,14 @@ func StoreBlob(blob []byte, opts ...TPMOption) error {
 		),
 	}
 
-	// Try to define the space (it might already exist)
+	// Define the NV space. If it already exists, continue with writing.
 	_, err = defineCmd.Execute(tpm)
 	if err != nil {
-		// If it already exists, that's fine, continue with writing
-		// In a real implementation, you might want to check the specific error
+		// Check if this is a "space already defined" error (TPM_RC_NV_DEFINED)
+		// For other errors, we should fail since they indicate real problems
+		if !isNVSpaceAlreadyDefined(err) {
+			return fmt.Errorf("defining NV space: %w", err)
+		}
 	}
 
 	// Write data to NV storage
@@ -124,4 +129,24 @@ func ReadBlob(opts ...TPMOption) ([]byte, error) {
 	}
 
 	return readRsp.Data.Buffer, nil
+}
+
+// isNVSpaceAlreadyDefined checks if the error indicates that the NV space is already defined.
+// This is a common condition when trying to define an NV space that already exists.
+func isNVSpaceAlreadyDefined(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// First check if it's the specific TPM error code
+	var tpmErr tpm2.TPMRC
+	if errors.As(err, &tpmErr) {
+		return tpmErr == tpm2.TPMRCNVDefined
+	}
+
+	// Fallback to string matching for other error formats
+	errStr := strings.ToLower(err.Error())
+	return strings.Contains(errStr, "nv_defined") ||
+		strings.Contains(errStr, "already defined") ||
+		strings.Contains(errStr, "index already")
 }
