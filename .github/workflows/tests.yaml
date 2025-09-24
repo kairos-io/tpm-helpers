@@ -19,7 +19,7 @@ jobs:
         sudo apt-get update
         sudo apt-get install libtspi-dev swtpm
         swtpm socket --server type=unixio,path=/tmp/tpm-server --ctrl type=unixio,path=/tmp/tpm-ctrl --tpm2 -d
-        go get github.com/onsi/ginkgo/v2/ginkgo
+        go install github.com/onsi/ginkgo/v2/ginkgo@latest
         go get github.com/onsi/gomega/...
     - name: Run tests
       run: |
