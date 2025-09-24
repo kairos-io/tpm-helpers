@@ -131,6 +131,41 @@ func ReadBlob(opts ...TPMOption) ([]byte, error) {
 	return readRsp.Data.Buffer, nil
 }
 
+// UndefineBlob removes an NV index from the TPM's Non-Volatile storage.
+// This frees up the space occupied by the NV index, allowing it to be reused.
+func UndefineBlob(opts ...TPMOption) error {
+	o, err := DefaultTPMOption(opts...)
+	if err != nil {
+		return err
+	}
+
+	// Open TPM transport
+	tpm, err := getTPMTransport(o)
+	if err != nil {
+		return err
+	}
+	defer tpm.Close() //nolint:errcheck // Cleanup operation
+
+	// Undefine the NV space
+	undefineCmd := tpm2.NVUndefineSpace{
+		AuthHandle: tpm2.AuthHandle{
+			Handle: tpm2.TPMRHOwner,
+			Auth:   tpm2.PasswordAuth([]byte(o.password)),
+		},
+		NVIndex: tpm2.NamedHandle{
+			Handle: tpm2.TPMHandle(o.index),
+			Name:   tpm2.TPM2BName{}, // Will be computed if needed
+		},
+	}
+
+	_, err = undefineCmd.Execute(tpm)
+	if err != nil {
+		return fmt.Errorf("undefining NV space: %w", err)
+	}
+
+	return nil
+}
+
 // isNVSpaceAlreadyDefined checks if the error indicates that the NV space is already defined.
 // This is a common condition when trying to define an NV space that already exists.
 func isNVSpaceAlreadyDefined(err error) bool {

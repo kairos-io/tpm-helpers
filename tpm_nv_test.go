@@ -21,5 +21,30 @@ var _ = Describe("TPM NV", func() {
 			})
 			CloseEmulatedDevice()
 		})
+
+		It("stores a blob, undefines it, and verifies it's gone", func() {
+			By("Storing the blob", func() {
+				err := StoreBlob([]byte("test-data"), EmulatedTPM, WithIndex("0x1500001"))
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			By("Reading the blob to confirm it exists", func() {
+				data, err := ReadBlob(WithIndex("0x1500001"), EmulatedTPM)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(data).To(Equal([]byte("test-data")))
+			})
+
+			By("Undefining the blob", func() {
+				err := UndefineBlob(WithIndex("0x1500001"), EmulatedTPM)
+				Expect(err).ToNot(HaveOccurred())
+			})
+
+			By("Attempting to read the undefined blob should fail", func() {
+				_, err := ReadBlob(WithIndex("0x1500001"), EmulatedTPM)
+				Expect(err).To(HaveOccurred())
+			})
+
+			CloseEmulatedDevice()
+		})
 	})
 })
