@@ -245,7 +245,6 @@ var _ = Describe("AK Manager", func() {
 			// Test CreateProofRequest
 			challengeResp := &AttestationChallengeResponse{
 				Challenge: challenge.EC,
-				Enrolled:  true,
 			}
 
 			proofReq, err := manager.CreateProofRequest(challengeResp)
@@ -287,7 +286,6 @@ var _ = Describe("AK Manager", func() {
 			// Test with empty challenge response - this will fail at credential activation
 			emptyResp := &AttestationChallengeResponse{
 				Challenge: &attest.EncryptedCredential{},
-				Enrolled:  false,
 			}
 			_, err := manager.CreateProofRequest(emptyResp)
 			Expect(err).To(HaveOccurred())

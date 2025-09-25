@@ -134,7 +134,6 @@ The WebSocket flow uses these data structures for the attestation protocol:
 ```go
 type AttestationChallengeResponse struct {
     Challenge *attest.EncryptedCredential // Credential activation challenge
-    Enrolled  bool                        // True if this was first-time enrollment
 }
 ```
 
@@ -259,7 +258,6 @@ func handleTPMAttestation(w http.ResponseWriter, r *http.Request) {
     
     challengeResp := &AttestationChallengeResponse{
         Challenge: challenge.EC,
-        Enrolled:  enrolled,
     }
     
     if err := conn.WriteJSON(challengeResp); err != nil {

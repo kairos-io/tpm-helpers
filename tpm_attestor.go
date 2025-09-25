@@ -40,7 +40,6 @@ type ChallengeResponse struct {
 // AttestationChallengeResponse represents the server's response containing challenge
 type AttestationChallengeResponse struct {
 	Challenge *attest.EncryptedCredential `json:"challenge"` // Credential activation challenge
-	Enrolled  bool                        `json:"enrolled"`  // True if this was a new enrollment
 }
 
 // ProofRequest represents the client's proof of TPM ownership
