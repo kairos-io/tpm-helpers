@@ -8,8 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
-	"os"
-	"path/filepath"
 
 	"github.com/google/go-attestation/attest"
 	"github.com/google/go-tpm/tpm2"
@@ -66,51 +64,38 @@ func (b *akBlob) getAKBytes() []byte {
 	return b.AKBytes
 }
 
-// AKManager manages Attestation Key lifecycle using blob storage
+// AKManager manages Attestation Key lifecycle using TPM NV storage
 type AKManager struct {
-	akBlobFile string // File path for storing the TPM-encrypted AK blob
-	config     *config
+	akBlobNV string // TPM NV index for storing the AK blob
+	config   *config
 }
 
 // NewAKManager creates a new AK manager instance
-// Requires WithAKHandleFile option to specify where to store/load the AK blob
+// Requires WithAKHandleNV option to specify the TPM NV index for storing/loading the AK blob
 func NewAKManager(opts ...Option) (*AKManager, error) {
 	c := newConfig()
 	if err := c.apply(opts...); err != nil {
 		return nil, fmt.Errorf("applying options: %w", err)
 	}
 
-	if c.akHandleFile == "" {
-		return nil, fmt.Errorf("AK blob file path is required - use WithAKHandleFile option")
+	if c.akHandleNV == "" {
+		return nil, fmt.Errorf("AK blob NV index is required - use WithAKHandleNV option")
 	}
 
 	return &AKManager{
-		akBlobFile: c.akHandleFile,
-		config:     c,
+		akBlobNV: c.akHandleNV,
+		config:   c,
 	}, nil
 }
 
 // GetOrCreateAK returns the AK public key bytes, creating the AK if it doesn't exist
 func (m *AKManager) GetOrCreateAK() ([]byte, error) {
-	// Check if AK blob file already exists
+	// Check if AK blob exists in TPM NV storage
 	if m.akExists() {
-		// Check file size and basic info
-		if stat, err := os.Stat(m.akBlobFile); err == nil {
-			// If file is empty, it's likely corrupted - return error for manual intervention
-			if stat.Size() == 0 {
-				return nil, fmt.Errorf("AK blob file exists but is empty (0 bytes) - this indicates corruption. Please remove the file manually and retry: %s", m.akBlobFile)
-			}
-
-			// If file is suspiciously small, it might be corrupted - return error for manual intervention
-			if stat.Size() < 50 {
-				return nil, fmt.Errorf("AK blob file is suspiciously small (%d bytes) - this may indicate corruption. Please verify the file or remove it manually and retry: %s", stat.Size(), m.akBlobFile)
-			}
-		}
-
 		// Load existing AK and return public key
 		akBlob, err := m.LoadAK()
 		if err != nil {
-			return nil, fmt.Errorf("failed to load existing AK blob file (this may indicate corruption or version mismatch). Please verify the file or remove it manually and retry. File: %s, Error: %w", m.akBlobFile, err)
+			return nil, fmt.Errorf("failed to load existing AK blob from TPM NV storage: %w", err)
 		}
 
 		publicKeyBytes, err := akBlob.getPublicKeyBytes()
@@ -125,9 +110,13 @@ func (m *AKManager) GetOrCreateAK() ([]byte, error) {
 	return m.createAndStoreAK()
 }
 
-// akExists checks if the AK blob file exists
+// akExists checks if the AK blob exists in TPM NV storage
 func (m *AKManager) akExists() bool {
-	_, err := os.Stat(m.akBlobFile)
+	opts := []TPMOption{WithIndex(m.akBlobNV)}
+	if m.config.device != "" {
+		opts = append(opts, WithDevice(m.config.device))
+	}
+	_, err := ReadBlob(opts...)
 	return err == nil
 }
 
@@ -163,26 +152,25 @@ func (m *AKManager) GetAKPublicKey() (crypto.PublicKey, error) {
 	return publicKeyFromTPMTPublic(pub)
 }
 
-// CleanupAK removes the AK blob file
+// CleanupAK removes the AK blob from TPM NV storage
 func (m *AKManager) CleanupAK() error {
-	// Remove the AK blob file
-	err := os.Remove(m.akBlobFile)
-	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("removing AK blob file: %w", err)
+	opts := []TPMOption{WithIndex(m.akBlobNV)}
+	if m.config.device != "" {
+		opts = append(opts, WithDevice(m.config.device))
 	}
-	return nil
+	return UndefineBlob(opts...)
 }
 
-// WithAKHandleFile sets the file path for storing AK handle information
-// This is required for all AK operations - callers must specify where to store the handle
-func WithAKHandleFile(path string) Option {
+// WithAKHandleNV sets the TPM NV index for storing AK handle information
+// This provides persistent storage that works in initramfs environments
+func WithAKHandleNV(nvIndex string) Option {
 	return func(c *config) error {
-		c.akHandleFile = path
+		c.akHandleNV = nvIndex
 		return nil
 	}
 }
 
-// createAndStoreAK creates a new AK using go-attestation and stores it to file
+// createAndStoreAK creates a new AK using go-attestation and stores it to TPM NV storage
 func (m *AKManager) createAndStoreAK() ([]byte, error) {
 	// Open TPM using go-attestation (same as legacy flow)
 	tpm, err := getTPM(m.config)
@@ -219,7 +207,7 @@ func (m *AKManager) createAndStoreAK() ([]byte, error) {
 		AttestationParams: paramsBytes,
 	}
 
-	// Store the blob to file
+	// Store the blob to TPM NV storage
 	if err := m.saveAKBlob(&akBlob); err != nil {
 		return nil, fmt.Errorf("saving AK blob: %w", err)
 	}
@@ -228,27 +216,25 @@ func (m *AKManager) createAndStoreAK() ([]byte, error) {
 	return params.Public, nil
 }
 
-// saveAKBlob saves the AK blob to the configured file
+// saveAKBlob saves the AK blob to TPM NV storage
 func (m *AKManager) saveAKBlob(blob *akBlob) error {
-	// Ensure directory exists
-	dir := filepath.Dir(m.akBlobFile)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("creating directory %s: %w", dir, err)
-	}
-
 	// Marshal to JSON
 	data, err := json.Marshal(blob)
 	if err != nil {
 		return fmt.Errorf("marshaling AK blob: %w", err)
 	}
 
-	// Write to file
-	return os.WriteFile(m.akBlobFile, data, 0600)
+	// Save to TPM NV storage
+	opts := []TPMOption{WithIndex(m.akBlobNV)}
+	if m.config.device != "" {
+		opts = append(opts, WithDevice(m.config.device))
+	}
+	return StoreBlob(data, opts...)
 }
 
-// LoadAK loads the AK from the blob file
+// LoadAK loads the AK from TPM NV storage
 func (m *AKManager) LoadAK() (*akBlob, error) {
-	// Load AK blob from file
+	// Load AK blob from TPM NV storage
 	blob, err := m.loadAKBlob()
 	if err != nil {
 		return nil, fmt.Errorf("loading AK blob: %w", err)
@@ -275,11 +261,16 @@ func (m *AKManager) GetStoredAKBytes() ([]byte, error) {
 	return akBlob.getAKBytes(), nil
 }
 
-// loadAKBlob loads the AK blob from the configured file
+// loadAKBlob loads the AK blob from TPM NV storage
 func (m *AKManager) loadAKBlob() (*akBlob, error) {
-	data, err := os.ReadFile(m.akBlobFile)
+	// Load from TPM NV storage
+	opts := []TPMOption{WithIndex(m.akBlobNV)}
+	if m.config.device != "" {
+		opts = append(opts, WithDevice(m.config.device))
+	}
+	data, err := ReadBlob(opts...)
 	if err != nil {
-		return nil, fmt.Errorf("reading AK blob file: %w", err)
+		return nil, fmt.Errorf("reading AK blob from TPM NV: %w", err)
 	}
 
 	var blob akBlob
