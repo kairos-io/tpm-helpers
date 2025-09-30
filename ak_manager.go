@@ -49,13 +49,17 @@ func NewAKManager(opts ...Option) (*AKManager, error) {
 		return nil, fmt.Errorf("opening TPM: %w", err)
 	}
 
+	fmt.Printf("DEBUG: AKManager created with TPM session: %p\n", tpm)
 	return &AKManager{config: c, tpm: tpm}, nil
 }
 
 // Close closes the TPM session and cleans up resources
 func (m *AKManager) Close() error {
 	if m.tpm != nil {
-		return m.tpm.Close()
+		fmt.Printf("DEBUG: Closing TPM session: %p\n", m.tpm)
+		err := m.tpm.Close()
+		m.tpm = nil // Set to nil after closing
+		return err
 	}
 	return nil
 }
@@ -143,6 +147,21 @@ func (m *AKManager) GetEK() (*attest.EK, error) {
 
 // CreateProofRequestWithAK creates a proof request using the transient AK
 func (m *AKManager) CreateProofRequestWithAK(challenge *AttestationChallengeResponse, ak *attest.AK) (*ProofRequest, error) {
+	// Debug: Check if TPM session is nil
+	if m.tpm == nil {
+		return nil, fmt.Errorf("TPM session is nil - AKManager not properly initialized")
+	}
+
+	// Debug: Check if challenge is nil
+	if challenge == nil {
+		return nil, fmt.Errorf("challenge is nil")
+	}
+
+	// Debug: Check if challenge.Challenge is nil
+	if challenge.Challenge == nil {
+		return nil, fmt.Errorf("challenge.Challenge is nil")
+	}
+
 	// Use the provided transient AK to activate the credential
 	secret, err := ak.ActivateCredential(m.tpm, *challenge.Challenge)
 	if err != nil {
