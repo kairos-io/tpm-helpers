@@ -9,7 +9,7 @@ import (
 )
 
 // StoreBlob stores binary data in the TPM's Non-Volatile (NV) storage.
-// The data is written to the specified index with the configured attributes and password.
+// Used for local passphrase storage in offline encryption mode.
 func StoreBlob(blob []byte, opts ...TPMOption) error {
 	o, err := DefaultTPMOption(opts...)
 	if err != nil {
@@ -23,30 +23,31 @@ func StoreBlob(blob []byte, opts ...TPMOption) error {
 	}
 	defer tpm.Close() //nolint:errcheck // Cleanup operation
 
-	// First, try to define the NV space
+	// Create the TPMS_NV_PUBLIC structure
+	nvPublic := tpm2.TPMSNVPublic{
+		NVIndex:    tpm2.TPMHandle(o.index),
+		NameAlg:    tpm2.TPMAlgSHA1,
+		Attributes: o.nvAttr,
+		DataSize:   uint16(len(blob)), // Use actual blob size
+	}
+
+	// Define the NV space
 	defineCmd := tpm2.NVDefineSpace{
 		AuthHandle: tpm2.TPMRHOwner,
 		Auth: tpm2.TPM2BAuth{
 			Buffer: []byte(o.password),
 		},
-		PublicInfo: tpm2.New2B(
-			tpm2.TPMSNVPublic{
-				NVIndex:    tpm2.TPMHandle(o.index),
-				NameAlg:    getTPMHashAlg(o.hash),
-				Attributes: o.nvAttr,
-				DataSize:   uint16(len(blob)),
-			},
-		),
+		PublicInfo: tpm2.New2B(nvPublic),
 	}
 
 	// Define the NV space. If it already exists, continue with writing.
 	_, err = defineCmd.Execute(tpm)
 	if err != nil {
-		// Check if this is a "space already defined" error (TPM_RC_NV_DEFINED)
-		// For other errors, we should fail since they indicate real problems
+		// Check if this is a "space already defined" error
 		if !isNVSpaceAlreadyDefined(err) {
 			return fmt.Errorf("defining NV space: %w", err)
 		}
+		// NV space already exists, continue with writing
 	}
 
 	// Write data to NV storage
@@ -76,7 +77,6 @@ func StoreBlob(blob []byte, opts ...TPMOption) error {
 }
 
 // ReadBlob reads binary data from the TPM's Non-Volatile (NV) storage.
-// The data is read from the specified index using the configured password.
 func ReadBlob(opts ...TPMOption) ([]byte, error) {
 	o, err := DefaultTPMOption(opts...)
 	if err != nil {
@@ -90,7 +90,7 @@ func ReadBlob(opts ...TPMOption) ([]byte, error) {
 	}
 	defer tpm.Close() //nolint:errcheck // Cleanup operation
 
-	// First, read the public info to get the data size
+	// Read the public info to get the data size
 	readPubCmd := tpm2.NVReadPublic{
 		NVIndex: tpm2.TPMHandle(o.index),
 	}
@@ -132,7 +132,6 @@ func ReadBlob(opts ...TPMOption) ([]byte, error) {
 }
 
 // UndefineBlob removes an NV index from the TPM's Non-Volatile storage.
-// This frees up the space occupied by the NV index, allowing it to be reused.
 func UndefineBlob(opts ...TPMOption) error {
 	o, err := DefaultTPMOption(opts...)
 	if err != nil {
@@ -167,13 +166,12 @@ func UndefineBlob(opts ...TPMOption) error {
 }
 
 // isNVSpaceAlreadyDefined checks if the error indicates that the NV space is already defined.
-// This is a common condition when trying to define an NV space that already exists.
 func isNVSpaceAlreadyDefined(err error) bool {
 	if err == nil {
 		return false
 	}
 
-	// First check if it's the specific TPM error code
+	// Check if it's the specific TPM error code
 	var tpmErr tpm2.TPMRC
 	if errors.As(err, &tpmErr) {
 		return tpmErr == tpm2.TPMRCNVDefined

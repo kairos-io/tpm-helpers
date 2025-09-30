@@ -28,7 +28,7 @@ func GenerateChallenge(ek *attest.EK, akParams *attest.AttestationParameters) ([
 		return nil, nil, fmt.Errorf("generating challenge: %w", err)
 	}
 
-	challengeBytes, err := json.Marshal(Challenge{EC: ec})
+	challengeBytes, err := json.Marshal(ec)
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshalling challenge: %w", err)
 	}
