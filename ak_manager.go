@@ -33,28 +33,37 @@ var DefaultEKAuthPolicy = []byte{
 // No persistent storage is required - AKs are created fresh for each attestation.
 type AKManager struct {
 	config *config
+	tpm    *attest.TPM
 }
 
-// NewAKManager creates a new AK manager
+// NewAKManager creates a new AK manager and opens a TPM session
 func NewAKManager(opts ...Option) (*AKManager, error) {
 	c := newConfig()
 	if err := c.apply(opts...); err != nil {
 		return nil, fmt.Errorf("applying options: %w", err)
 	}
-	return &AKManager{config: c}, nil
+
+	// Open TPM session and keep it open for the lifetime of the AKManager
+	tpm, err := getTPM(c)
+	if err != nil {
+		return nil, fmt.Errorf("opening TPM: %w", err)
+	}
+
+	return &AKManager{config: c, tpm: tpm}, nil
+}
+
+// Close closes the TPM session and cleans up resources
+func (m *AKManager) Close() error {
+	if m.tpm != nil {
+		return m.tpm.Close()
+	}
+	return nil
 }
 
 // CreateTransientAK creates a new ephemeral AK for attestation
 func (m *AKManager) CreateTransientAK() (*attest.AK, *attest.AttestationParameters, error) {
-	// Open TPM using go-attestation
-	tpm, err := getTPM(m.config)
-	if err != nil {
-		return nil, nil, fmt.Errorf("opening TPM: %w", err)
-	}
-	defer tpm.Close()
-
 	// Create a new transient AK
-	ak, err := tpm.NewAK(nil)
+	ak, err := m.tpm.NewAK(nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("creating transient AK: %w", err)
 	}
@@ -68,13 +77,6 @@ func (m *AKManager) CreateTransientAK() (*attest.AK, *attest.AttestationParamete
 
 // GetAKPublicKey returns the public key for the current transient AK
 func (m *AKManager) GetAKPublicKey(ak *attest.AK) (crypto.PublicKey, error) {
-	// Open TPM using go-attestation
-	tpm, err := getTPM(m.config)
-	if err != nil {
-		return nil, fmt.Errorf("opening TPM: %w", err)
-	}
-	defer tpm.Close()
-
 	// Get the public key from the AK's attestation parameters
 	params := ak.AttestationParameters()
 	pub, err := tpm2.Unmarshal[tpm2.TPMTPublic](params.Public)
@@ -88,15 +90,8 @@ func (m *AKManager) GetAKPublicKey(ak *attest.AK) (crypto.PublicKey, error) {
 
 // PerformAttestation performs a complete attestation flow using a transient AK
 func (m *AKManager) PerformAttestation(ak *attest.AK, challenge *attest.EncryptedCredential) ([]byte, error) {
-	// Open TPM using go-attestation
-	tpm, err := getTPM(m.config)
-	if err != nil {
-		return nil, fmt.Errorf("opening TPM: %w", err)
-	}
-	defer tpm.Close()
-
 	// Use go-attestation's ActivateCredential (same as legacy flow)
-	secret, err := ak.ActivateCredential(tpm, *challenge)
+	secret, err := ak.ActivateCredential(m.tpm, *challenge)
 	if err != nil {
 		return nil, fmt.Errorf("activating credential: %w", err)
 	}
@@ -106,13 +101,6 @@ func (m *AKManager) PerformAttestation(ak *attest.AK, challenge *attest.Encrypte
 
 // GeneratePCRQuote generates a PCR quote using the transient AK
 func (m *AKManager) GeneratePCRQuote(ak *attest.AK, pcrs []int) ([]byte, []byte, error) {
-	// Open TPM using go-attestation
-	tpm, err := getTPM(m.config)
-	if err != nil {
-		return nil, nil, fmt.Errorf("opening TPM: %w", err)
-	}
-	defer tpm.Close()
-
 	// Generate TPM quote with explicit PCR selection using modern go-attestation v0.5.1+ API
 	// Use QuotePCRs to select the specified PCRs for attestation
 	nonce := make([]byte, 20) // 20-byte nonce for quote freshness
@@ -122,7 +110,7 @@ func (m *AKManager) GeneratePCRQuote(ak *attest.AK, pcrs []int) ([]byte, []byte,
 
 	// Generate quote using the transient AK
 	// Use the go-attestation library's Quote method with the correct signature
-	quote, err := ak.Quote(tpm, nonce, attest.HashSHA256)
+	quote, err := ak.Quote(m.tpm, nonce, attest.HashSHA256)
 	if err != nil {
 		return nil, nil, fmt.Errorf("generating PCR quote: %w", err)
 	}
@@ -139,15 +127,8 @@ func (m *AKManager) GeneratePCRQuote(ak *attest.AK, pcrs []int) ([]byte, []byte,
 
 // GetEK retrieves the Endorsement Key from the TPM
 func (m *AKManager) GetEK() (*attest.EK, error) {
-	// Open TPM using go-attestation
-	tpm, err := getTPM(m.config)
-	if err != nil {
-		return nil, fmt.Errorf("opening TPM: %w", err)
-	}
-	defer tpm.Close()
-
 	// Get the EK from the TPM
-	ek, err := tpm.EKs()
+	ek, err := m.tpm.EKs()
 	if err != nil {
 		return nil, fmt.Errorf("getting EK: %w", err)
 	}
@@ -162,25 +143,13 @@ func (m *AKManager) GetEK() (*attest.EK, error) {
 
 // CreateProofRequestWithAK creates a proof request using the transient AK
 func (m *AKManager) CreateProofRequestWithAK(challenge *AttestationChallengeResponse, ak *attest.AK) (*ProofRequest, error) {
-	// Open TPM using go-attestation
-	tpm, err := getTPM(m.config)
-	if err != nil {
-		return nil, fmt.Errorf("opening TPM: %w", err)
-	}
-	defer tpm.Close()
-
-	// Use the transient AK to activate the credential
-	secret, err := ak.ActivateCredential(tpm, *challenge.Challenge)
+	// Use the provided transient AK to activate the credential
+	secret, err := ak.ActivateCredential(m.tpm, *challenge.Challenge)
 	if err != nil {
 		return nil, fmt.Errorf("activating credential with transient AK: %w", err)
 	}
 
-	// Create proof request with the activated secret
-	proofReq := &ProofRequest{
-		Secret: secret,
-	}
-
-	return proofReq, nil
+	return &ProofRequest{Secret: secret}, nil
 }
 
 // publicKeyFromTPMTPublic converts a TPMTPublic to a crypto.PublicKey
