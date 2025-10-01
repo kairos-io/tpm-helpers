@@ -160,7 +160,7 @@ func (m *AKManager) GeneratePCRQuote(pcrs []int) ([]byte, error) {
 	return out, nil
 }
 
-// VerifyPCRQuote verifies a PCR quote signature and ensures PCR values are cryptographically bound to the quote
+// VerifyPCRQuote verifies a PCR quote and ensures PCR values are consistent with the quote
 // Returns the verified PCR values.
 func VerifyPCRQuote(quoteBytes []byte, akPublic crypto.PublicKey) (map[int][]byte, error) {
 	if len(quoteBytes) == 0 {
@@ -201,30 +201,51 @@ func verifyQuoteSignature(quote, signature []byte, akPublic crypto.PublicKey) er
 		return fmt.Errorf("empty quote or signature")
 	}
 
-	// Hash the quote data
+	// Parse the TPM signature structure
+	tpmSig, err := tpm2.Unmarshal[tpm2.TPMTSignature](signature)
+	if err != nil {
+		return fmt.Errorf("unmarshaling TPM signature: %w", err)
+	}
+
+	// Hash the quote data using the hash algorithm from the signature
 	hash := sha256.Sum256(quote)
 
-	// Verify the signature based on the key type
-	switch pub := akPublic.(type) {
-	case *rsa.PublicKey:
-		return rsa.VerifyPKCS1v15(pub, crypto.SHA256, hash[:], signature)
-	case *ecdsa.PublicKey:
-		// For ECDSA, the signature from TPM is typically in raw format (r||s)
-		if len(signature) != 64 {
-			return fmt.Errorf("invalid ECDSA signature length: expected 64 bytes, got %d", len(signature))
+	// Verify the signature based on the algorithm
+	switch tpmSig.SigAlg {
+	case tpm2.TPMAlgRSASSA, tpm2.TPMAlgRSAPSS:
+		rsaSig, err := tpmSig.Signature.RSASSA()
+		if err != nil {
+			return fmt.Errorf("getting RSA signature: %w", err)
 		}
 
-		// Split into r and s components
-		r := new(big.Int).SetBytes(signature[:32])
-		s := new(big.Int).SetBytes(signature[32:])
+		rsaPub, ok := akPublic.(*rsa.PublicKey)
+		if !ok {
+			return fmt.Errorf("AK public key is not RSA")
+		}
 
-		// Verify the signature
-		if !ecdsa.Verify(pub, hash[:], r, s) {
+		return rsa.VerifyPKCS1v15(rsaPub, crypto.SHA256, hash[:], rsaSig.Sig.Buffer)
+
+	case tpm2.TPMAlgECDSA:
+		eccSig, err := tpmSig.Signature.ECDSA()
+		if err != nil {
+			return fmt.Errorf("getting ECDSA signature: %w", err)
+		}
+
+		eccPub, ok := akPublic.(*ecdsa.PublicKey)
+		if !ok {
+			return fmt.Errorf("AK public key is not ECDSA")
+		}
+
+		r := new(big.Int).SetBytes(eccSig.SignatureR.Buffer)
+		s := new(big.Int).SetBytes(eccSig.SignatureS.Buffer)
+
+		if !ecdsa.Verify(eccPub, hash[:], r, s) {
 			return fmt.Errorf("ECDSA signature verification failed")
 		}
 		return nil
+
 	default:
-		return fmt.Errorf("unsupported public key type for quote verification: %T", akPublic)
+		return fmt.Errorf("unsupported signature algorithm: %v", tpmSig.SigAlg)
 	}
 }
 
@@ -241,15 +262,10 @@ func verifyPCRsAgainstQuote(quote []byte, providedPCRs map[int][]byte) error {
 		return fmt.Errorf("not a quote attestation, got type: %v", attestData.Type)
 	}
 
-	// Parse the quote contents to extract PCR selection and digest
-	if len(attestData.ExtraData.Buffer) == 0 {
-		return fmt.Errorf("no quote data in attestation")
-	}
-
-	// Parse the quote info from the extra data
-	quoteInfo, err := tpm2.Unmarshal[tpm2.TPMSQuoteInfo](attestData.ExtraData.Buffer)
+	// Get the quote info from the Attested union
+	quoteInfo, err := attestData.Attested.Quote()
 	if err != nil {
-		return fmt.Errorf("parsing quote info: %w", err)
+		return fmt.Errorf("getting quote info from attestation: %w", err)
 	}
 
 	// Extract PCR selection from the quote info
