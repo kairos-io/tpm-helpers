@@ -1,9 +1,7 @@
 package tpm
 
 import (
-	"bytes"
 	"crypto/x509"
-	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"strings"
@@ -13,28 +11,6 @@ import (
 	"github.com/kairos-io/tpm-helpers/backend"
 	"github.com/pkg/errors"
 )
-
-// GenerateChallenge generates a challenge from attestation parameters and a public endorsed key
-// This is the main function that should be used with go-attestation's native types
-func GenerateChallenge(ek *attest.EK, akParams *attest.AttestationParameters) ([]byte, []byte, error) {
-	ap := attest.ActivationParameters{
-		TPMVersion: attest.TPMVersion20,
-		EK:         ek.Public,
-		AK:         *akParams, // Use the AttestationParameters directly
-	}
-
-	secret, ec, err := ap.Generate()
-	if err != nil {
-		return nil, nil, fmt.Errorf("generating challenge: %w", err)
-	}
-
-	challengeBytes, err := json.Marshal(ec)
-	if err != nil {
-		return nil, nil, fmt.Errorf("marshalling challenge: %w", err)
-	}
-
-	return secret, challengeBytes, nil
-}
 
 // ResolveToken is just syntax sugar around GetPubHash.
 // If the token provided is in EK's form it just returns it, otherwise
@@ -145,16 +121,4 @@ func DecodeEK(pemBytes []byte) (*attest.EK, error) {
 	}
 
 	return nil, fmt.Errorf("invalid pem type: %s", block.Type)
-}
-
-// ValidateChallenge validates a challange against a secret
-func ValidateChallenge(secret, resp []byte) error {
-	var response ChallengeResponse
-	if err := json.Unmarshal(resp, &response); err != nil {
-		return fmt.Errorf("unmarshalling challenge response: %w", err)
-	}
-	if !bytes.Equal(secret, response.Secret) {
-		return fmt.Errorf("invalid challenge response")
-	}
-	return nil
 }

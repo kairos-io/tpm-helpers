@@ -5,8 +5,6 @@ import (
 	"crypto/rsa"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"github.com/google/go-attestation/attest"
 	. "github.com/kairos-io/tpm-helpers"
@@ -14,297 +12,52 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-var _ = Describe("AK Manager", func() {
-	var tempDir string
-	var handleFilePath string
-
-	BeforeEach(func() {
-		var err error
-		tempDir, err = os.MkdirTemp("", "ak_manager_test")
-		Expect(err).ToNot(HaveOccurred())
-		handleFilePath = filepath.Join(tempDir, "ak_handle.json")
-	})
-
-	AfterEach(func() {
-		os.RemoveAll(tempDir) //nolint:errcheck
-	})
-
-	Context("basic AK operations", func() {
+var _ = Describe("AK Manager - Transient AK Implementation", func() {
+	Context("basic transient AK operations", func() {
 		var manager *AKManager
 
 		BeforeEach(func() {
 			var err error
 			// Use Ginkgo's seed for deterministic tests
-			manager, err = NewAKManager(Emulated, WithSeed(GinkgoRandomSeed()), WithAKHandleFile(handleFilePath))
+			manager, err = NewAKManager(Emulated, WithSeed(GinkgoRandomSeed()))
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		It("should create a new AK when none exists", func() {
-			akBytes, err := manager.GetOrCreateAK()
-			Expect(err).ToNot(HaveOccurred())
-			Expect(akBytes).ToNot(BeEmpty())
+		AfterEach(func() {
+			if manager != nil {
+				manager.Close() //nolint:errcheck
+			}
 		})
 
-		It("should store AK information to file", func() {
-			akBytes, err := manager.GetOrCreateAK()
+		It("should expose AK attestation parameters", func() {
+			params, err := manager.AKParams()
 			Expect(err).ToNot(HaveOccurred())
-			Expect(akBytes).ToNot(BeEmpty())
+			Expect(params).ToNot(BeNil())
+			Expect(params.Public).ToNot(BeEmpty())
+		})
 
-			// Verify blob file was created
-			Expect(handleFilePath).To(BeAnExistingFile())
+		It("should get EK from TPM", func() {
+			ek, err := manager.GetEK()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(ek).ToNot(BeNil())
+			Expect(ek.Public).ToNot(BeNil())
+		})
 
-			// Verify we can load the AK and it has the expected public key bytes
+		It("should get AK public key bytes", func() {
 			publicKeyBytes, err := manager.GetAKPublicKeyBytes()
 			Expect(err).ToNot(HaveOccurred())
-			Expect(publicKeyBytes).To(Equal(akBytes))
+			Expect(publicKeyBytes).ToNot(BeEmpty())
+		})
 
-			// Verify attestation data is accessible
-			_, attestationParams, err := manager.GetAttestationData()
+		It("should get attestation data for challenge generation", func() {
+			ek, attestationParams, err := manager.GetAttestationData()
 			Expect(err).ToNot(HaveOccurred())
+			Expect(ek).ToNot(BeNil())
 			Expect(attestationParams).ToNot(BeNil())
-
-			// Verify AK bytes are stored
-			storedAKBytes, err := manager.GetStoredAKBytes()
-			Expect(err).ToNot(HaveOccurred())
-			Expect(storedAKBytes).ToNot(BeEmpty())
-
-			// Verify we can get the public key
-			pubKey, err := manager.GetAKPublicKey()
-			Expect(err).ToNot(HaveOccurred())
-			Expect(pubKey).ToNot(BeNil())
+			Expect(attestationParams.Public).ToNot(BeEmpty())
 		})
 
-		It("should be idempotent - return same AK when called multiple times", func() {
-			// Create AK first time
-			akBytes1, err := manager.GetOrCreateAK()
-			Expect(err).ToNot(HaveOccurred())
-
-			// Call again - should return same AK bytes (loaded from file)
-			akBytes2, err := manager.GetOrCreateAK()
-			Expect(err).ToNot(HaveOccurred())
-			Expect(akBytes2).To(Equal(akBytes1))
-		})
-
-		It("should cleanup AK and remove handle file", func() {
-			akBytes, err := manager.GetOrCreateAK()
-			Expect(err).ToNot(HaveOccurred())
-			Expect(akBytes).ToNot(BeEmpty())
-			Expect(handleFilePath).To(BeAnExistingFile())
-
-			err = manager.CleanupAK()
-			Expect(err).ToNot(HaveOccurred())
-			Expect(handleFilePath).ToNot(BeAnExistingFile())
-
-			// Verify AK is no longer accessible
-			_, err = manager.LoadAK()
-			Expect(err).To(HaveOccurred())
-		})
-
-		It("should return error when handle file is corrupted", func() {
-			// Create invalid JSON file
-			err := os.WriteFile(handleFilePath, []byte("invalid json"), 0600)
-			Expect(err).ToNot(HaveOccurred())
-
-			// Create manager after corrupted file exists
-			corruptedManager, err := NewAKManager(Emulated, WithSeed(GinkgoRandomSeed()), WithAKHandleFile(handleFilePath))
-			Expect(err).ToNot(HaveOccurred())
-
-			// Should return error when trying to load corrupted file
-			_, err = corruptedManager.GetOrCreateAK()
-			Expect(err).To(HaveOccurred())
-			// Since the file size check happens first, we'll get a size error instead of a JSON error
-			Expect(err.Error()).To(ContainSubstring("suspiciously small"))
-		})
-	})
-
-	Context("multiple managers and file isolation", func() {
-		It("should create different AKs when using separate storage files", func() {
-			handleFile2 := filepath.Join(tempDir, "ak_handle2.json")
-			seed := GinkgoRandomSeed()
-
-			// Each manager creates a new AK independently (different files = no shared state)
-			manager1, err := NewAKManager(Emulated, WithSeed(seed), WithAKHandleFile(handleFilePath))
-			Expect(err).ToNot(HaveOccurred())
-
-			manager2, err := NewAKManager(Emulated, WithSeed(seed), WithAKHandleFile(handleFile2))
-			Expect(err).ToNot(HaveOccurred())
-
-			akBytes1, err := manager1.GetOrCreateAK()
-			Expect(err).ToNot(HaveOccurred())
-
-			akBytes2, err := manager2.GetOrCreateAK()
-			Expect(err).ToNot(HaveOccurred())
-
-			// Different storage files = different AKs (each creates independently)
-			Expect(akBytes1).ToNot(Equal(akBytes2))
-		})
-
-		It("should create same AK for same file across different manager instances", func() {
-			seed := GinkgoRandomSeed()
-
-			// First manager creates AK
-			manager1, err := NewAKManager(Emulated, WithSeed(seed), WithAKHandleFile(handleFilePath))
-			Expect(err).ToNot(HaveOccurred())
-
-			akBytes1, err := manager1.GetOrCreateAK()
-			Expect(err).ToNot(HaveOccurred())
-
-			// Second manager with same file should load existing AK
-			manager2, err := NewAKManager(Emulated, WithSeed(seed), WithAKHandleFile(handleFilePath))
-			Expect(err).ToNot(HaveOccurred())
-
-			akBytes2, err := manager2.GetOrCreateAK()
-			Expect(err).ToNot(HaveOccurred())
-
-			// Same file = same AK (loaded from blob)
-			Expect(akBytes2).To(Equal(akBytes1))
-		})
-	})
-
-	Context("manager instance behavior", func() {
-		It("should create same AK when recreated by same manager instance", func() {
-			// This test ensures deterministic behavior within the same manager
-			seed := GinkgoRandomSeed()
-
-			manager, err := NewAKManager(Emulated, WithSeed(seed), WithAKHandleFile(handleFilePath))
-			Expect(err).ToNot(HaveOccurred())
-
-			// First creation
-			akBytes1, err := manager.GetOrCreateAK()
-			Expect(err).ToNot(HaveOccurred())
-
-			// Clean up and recreate using the same manager
-			err = manager.CleanupAK()
-			Expect(err).ToNot(HaveOccurred())
-
-			// Second creation with same manager should give consistent result
-			akBytes2, err := manager.GetOrCreateAK()
-			Expect(err).ToNot(HaveOccurred())
-
-			// Note: Due to TPM simulator behavior, we verify both keys are valid but may differ
-			// The important thing is both operations succeed and produce valid keys
-			Expect(akBytes1).ToNot(BeEmpty())
-			Expect(akBytes2).ToNot(BeEmpty())
-		})
-	})
-
-	Context("error conditions", func() {
-		It("should return error when handle file directory doesn't exist and can't be created", func() {
-			// Try to use a path that can't be created (invalid parent)
-			invalidPath := "/proc/this/path/cannot/be/created/ak_handle.json"
-			manager, err := NewAKManager(Emulated, WithSeed(GinkgoRandomSeed()), WithAKHandleFile(invalidPath))
-			Expect(err).ToNot(HaveOccurred()) // Manager creation succeeds
-
-			_, err = manager.GetOrCreateAK()
-			Expect(err).To(MatchError(ContainSubstring("no such file or directory"))) // But AK creation fails
-		})
-
-		It("should require AK handle file path", func() {
-			// Don't provide WithAKHandleFile option
-			_, err := NewAKManager(Emulated, WithSeed(GinkgoRandomSeed()))
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("AK blob file path is required"))
-		})
-	})
-
-	Context("attestation workflow operations", func() {
-		var manager *AKManager
-
-		BeforeEach(func() {
-			var err error
-			manager, err = NewAKManager(Emulated, WithSeed(GinkgoRandomSeed()), WithAKHandleFile(handleFilePath))
-			Expect(err).ToNot(HaveOccurred())
-
-			// Create AK first
-			_, err = manager.GetOrCreateAK()
-			Expect(err).ToNot(HaveOccurred())
-		})
-
-		It("should activate credentials and create proof requests", func() {
-			// Get attestation data to create a valid challenge
-			ek, akParams, err := manager.GetAttestationData()
-			Expect(err).ToNot(HaveOccurred())
-
-			// Generate a challenge using the existing GenerateChallenge function
-			expectedSecret, challengeBytes, err := GenerateChallenge(ek, akParams)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(expectedSecret).ToNot(BeEmpty())
-			Expect(challengeBytes).ToNot(BeEmpty())
-
-			// Parse the challenge
-			var challenge Challenge
-			err = json.Unmarshal(challengeBytes, &challenge)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(challenge.EC).ToNot(BeNil())
-
-			// Test ActivateCredential directly
-			secret, err := manager.ActivateCredential(&challenge)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(secret).To(Equal(expectedSecret))
-
-			// Test CreateProofRequest
-			challengeResp := &AttestationChallengeResponse{
-				Challenge: challenge.EC,
-			}
-
-			proofReq, err := manager.CreateProofRequest(challengeResp)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(proofReq).ToNot(BeNil())
-			Expect(proofReq.Secret).To(Equal(expectedSecret))
-			Expect(proofReq.PCRQuote).ToNot(BeEmpty())
-
-			// Verify PCR quote is valid JSON with proper structure
-			var quoteData map[string]interface{}
-			err = json.Unmarshal(proofReq.PCRQuote, &quoteData)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(quoteData["quote"]).ToNot(BeNil())
-			Expect(quoteData["pcrs"]).ToNot(BeNil())
-
-			// Verify default PCRs are selected (0, 7, 11) by checking PCR map keys
-			pcrsMap := quoteData["pcrs"].(map[string]interface{})
-			expectedPCRs := []string{"0", "7", "11"}
-			for _, expectedPCR := range expectedPCRs {
-				Expect(pcrsMap).To(HaveKey(expectedPCR))
-			}
-
-			// Verify quote structure has expected fields
-			quoteInfo := quoteData["quote"].(map[string]interface{})
-			Expect(quoteInfo["version"]).ToNot(BeNil())
-			Expect(quoteInfo["quote"]).ToNot(BeNil())
-			Expect(quoteInfo["signature"]).ToNot(BeNil())
-		})
-
-		It("should return error when activating invalid credentials", func() {
-			// Test with empty/invalid challenge - this will fail at the TPM level
-			emptyChallenge := &Challenge{EC: &attest.EncryptedCredential{}}
-			_, err := manager.ActivateCredential(emptyChallenge)
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("activating credential"))
-		})
-
-		It("should return error when creating proof request with invalid challenge", func() {
-			// Test with empty challenge response - this will fail at credential activation
-			emptyResp := &AttestationChallengeResponse{
-				Challenge: &attest.EncryptedCredential{},
-			}
-			_, err := manager.CreateProofRequest(emptyResp)
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("activating credential"))
-		})
-	})
-
-	Context("utility functions", func() {
-		It("should convert TPMTPublic to crypto.PublicKey through GetAKPublicKey", func() {
-			// Since publicKeyFromTPMTPublic is an internal function and creating valid
-			// TPMTPublic structures requires deep TPM knowledge, we test it indirectly
-			// through GetAKPublicKey which uses it internally.
-			manager, err := NewAKManager(Emulated, WithSeed(GinkgoRandomSeed()), WithAKHandleFile(handleFilePath))
-			Expect(err).ToNot(HaveOccurred())
-
-			_, err = manager.GetOrCreateAK()
-			Expect(err).ToNot(HaveOccurred())
-
-			// This internally uses publicKeyFromTPMTPublic
+		It("should get AK public key as crypto.PublicKey", func() {
 			pubKey, err := manager.GetAKPublicKey()
 			Expect(err).ToNot(HaveOccurred())
 			Expect(pubKey).ToNot(BeNil())
@@ -335,6 +88,171 @@ var _ = Describe("AK Manager", func() {
 			default:
 				Fail(fmt.Sprintf("Expected RSA or ECDSA public key, got %T", pubKey))
 			}
+		})
+	})
+
+	// uniqueness tests removed; manager caches a single AK per instance
+
+	Context("PCR quote generation", func() {
+		var manager *AKManager
+
+		BeforeEach(func() {
+			var err error
+			manager, err = NewAKManager(Emulated, WithSeed(GinkgoRandomSeed()))
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		AfterEach(func() {
+			if manager != nil {
+				manager.Close() //nolint:errcheck
+			}
+		})
+
+		It("should generate PCR quote with specified PCRs", func() {
+			pcrs := []int{0, 7, 11}
+			quoteBytes, err := manager.GeneratePCRQuote(pcrs)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(quoteBytes).ToNot(BeEmpty())
+
+			// Verify quote is valid JSON structure
+			var payload map[string]interface{}
+			err = json.Unmarshal(quoteBytes, &payload)
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("should return error for invalid PCR indices", func() {
+			invalidPCRs := []int{-1, 24, 100}
+			_, err := manager.GeneratePCRQuote(invalidPCRs)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("out of range"))
+		})
+
+		It("should return error for empty PCR list", func() {
+			emptyPCRs := []int{}
+			_, err := manager.GeneratePCRQuote(emptyPCRs)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("at least one PCR"))
+		})
+	})
+
+	Context("complete attestation workflow", func() {
+		var manager *AKManager
+
+		BeforeEach(func() {
+			var err error
+			manager, err = NewAKManager(Emulated, WithSeed(GinkgoRandomSeed()))
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		AfterEach(func() {
+			if manager != nil {
+				manager.Close() //nolint:errcheck
+			}
+		})
+
+		It("should complete full attestation workflow with PCR quote", func() {
+			// Get attestation data to create a valid challenge
+			ek, akParams, err := manager.GetAttestationData()
+			Expect(err).ToNot(HaveOccurred())
+
+			// Generate a challenge using the existing GenerateChallenge function
+			ap := attest.ActivationParameters{TPMVersion: attest.TPMVersion20, EK: ek.Public, AK: *akParams}
+			expectedSecret, ec, err := ap.Generate()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(expectedSecret).ToNot(BeEmpty())
+			challenge := ec
+
+			// Parse the challenge
+			// Test ActivateCredential directly
+			secret, err := manager.ActivateCredential(challenge)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(secret).To(Equal(expectedSecret))
+
+			// Test CreateProofRequest with complete PCR quote
+			challengeResp := &AttestationChallengeResponse{Challenge: challenge}
+			proofReq, err := manager.CreateProofRequest(challengeResp, []int{0, 7, 11})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(proofReq).ToNot(BeNil())
+			Expect(proofReq.Secret).To(Equal(expectedSecret))
+			Expect(proofReq.PCRQuote).ToNot(BeEmpty())
+
+			// Verify PCR quote is valid JSON with proper structure
+			var quoteData map[string]interface{}
+			err = json.Unmarshal(proofReq.PCRQuote, &quoteData)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(quoteData["quote"]).ToNot(BeNil())
+			Expect(quoteData["pcrs"]).ToNot(BeNil())
+
+			// Verify default PCRs are selected (0, 7, 11) by checking PCR map keys
+			pcrsMap := quoteData["pcrs"].(map[string]interface{})
+			expectedPCRs := []string{"0", "7", "11"}
+			for _, expectedPCR := range expectedPCRs {
+				Expect(pcrsMap).To(HaveKey(expectedPCR))
+			}
+
+			// Verify quote structure has expected fields
+			quoteInfo := quoteData["quote"].(map[string]interface{})
+			Expect(quoteInfo["version"]).ToNot(BeNil())
+			Expect(quoteInfo["quote"]).ToNot(BeNil())
+			Expect(quoteInfo["signature"]).ToNot(BeNil())
+		})
+
+		// certification validation test removed (implicit via credential activation)
+
+		It("should return error when activating invalid credentials", func() {
+			// Test with empty/invalid challenge - this will fail at the TPM level
+			emptyChallenge := &attest.EncryptedCredential{}
+			_, err := manager.ActivateCredential(emptyChallenge)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("activating credential"))
+		})
+
+		It("should return error when creating proof request with invalid challenge", func() {
+			// Test with empty challenge response - this will fail at credential activation
+			emptyResp := &AttestationChallengeResponse{Challenge: &attest.EncryptedCredential{}}
+			_, err := manager.CreateProofRequest(emptyResp, []int{0})
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("activating credential"))
+		})
+	})
+
+	Context("manager lifecycle", func() {
+		It("should properly close TPM session", func() {
+			manager, err := NewAKManager(Emulated, WithSeed(GinkgoRandomSeed()))
+			Expect(err).ToNot(HaveOccurred())
+
+			// Ensure manager exposes AK params (session active)
+			_, err = manager.AKParams()
+			Expect(err).ToNot(HaveOccurred())
+
+			// Close manager should succeed
+			err = manager.Close()
+			Expect(err).ToNot(HaveOccurred())
+
+			// Subsequent close should not error
+			err = manager.Close()
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("should handle multiple managers independently", func() {
+			seed := GinkgoRandomSeed()
+
+			By("creating manager1")
+			manager1, err := NewAKManager(Emulated, WithSeed(seed))
+			Expect(err).ToNot(HaveOccurred())
+			ek1, err := manager1.GetEK()
+			Expect(err).ToNot(HaveOccurred())
+			manager1.Close() //nolint:errcheck
+
+			By("creating manager2")
+			manager2, err := NewAKManager(Emulated, WithSeed(seed))
+			Expect(err).ToNot(HaveOccurred())
+			ek2, err := manager2.GetEK()
+			Expect(err).ToNot(HaveOccurred())
+			manager2.Close() //nolint:errcheck
+
+			// EKs should be the same (same TPM simulator with same seed)
+			Expect(ek1.Public).To(Equal(ek2.Public))
 		})
 	})
 })
