@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rsa"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"math/big"
@@ -157,6 +158,171 @@ func (m *AKManager) GeneratePCRQuote(pcrs []int) ([]byte, error) {
 		return nil, fmt.Errorf("marshaling quote data: %w", err)
 	}
 	return out, nil
+}
+
+// VerifyPCRQuote verifies a PCR quote signature and ensures PCR values are cryptographically bound to the quote
+// Returns the verified PCR values.
+func VerifyPCRQuote(quoteBytes []byte, akPublic crypto.PublicKey) (map[int][]byte, error) {
+	if len(quoteBytes) == 0 {
+		return nil, fmt.Errorf("empty quote data")
+	}
+
+	// Parse the quote structure
+	var quoteData struct {
+		Quote struct {
+			Version   string `json:"version"`
+			Quote     []byte `json:"quote"`
+			Signature []byte `json:"signature"`
+		} `json:"quote"`
+		PCRs map[int][]byte `json:"pcrs"`
+	}
+
+	if err := json.Unmarshal(quoteBytes, &quoteData); err != nil {
+		return nil, fmt.Errorf("unmarshaling quote data: %w", err)
+	}
+
+	// Verify the quote signature using the AK public key
+	if err := verifyQuoteSignature(quoteData.Quote.Quote, quoteData.Quote.Signature, akPublic); err != nil {
+		return nil, fmt.Errorf("quote signature verification failed: %w", err)
+	}
+
+	// Verify that the provided PCRs are consistent with the quote
+	if err := verifyPCRsAgainstQuote(quoteData.Quote.Quote, quoteData.PCRs); err != nil {
+		return nil, fmt.Errorf("PCR verification against quote failed: %w", err)
+	}
+
+	// Return the verified PCR values
+	return quoteData.PCRs, nil
+}
+
+// verifyQuoteSignature verifies the TPM quote signature using the AK public key
+func verifyQuoteSignature(quote, signature []byte, akPublic crypto.PublicKey) error {
+	if len(quote) == 0 || len(signature) == 0 {
+		return fmt.Errorf("empty quote or signature")
+	}
+
+	// Hash the quote data
+	hash := sha256.Sum256(quote)
+
+	// Verify the signature based on the key type
+	switch pub := akPublic.(type) {
+	case *rsa.PublicKey:
+		return rsa.VerifyPKCS1v15(pub, crypto.SHA256, hash[:], signature)
+	case *ecdsa.PublicKey:
+		// For ECDSA, the signature from TPM is typically in raw format (r||s)
+		if len(signature) != 64 {
+			return fmt.Errorf("invalid ECDSA signature length: expected 64 bytes, got %d", len(signature))
+		}
+
+		// Split into r and s components
+		r := new(big.Int).SetBytes(signature[:32])
+		s := new(big.Int).SetBytes(signature[32:])
+
+		// Verify the signature
+		if !ecdsa.Verify(pub, hash[:], r, s) {
+			return fmt.Errorf("ECDSA signature verification failed")
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported public key type for quote verification: %T", akPublic)
+	}
+}
+
+// verifyPCRsAgainstQuote verifies that the provided PCRs are consistent with the TPM quote
+func verifyPCRsAgainstQuote(quote []byte, providedPCRs map[int][]byte) error {
+	// Parse the TPM quote structure using modern go-tpm API
+	attestData, err := tpm2.Unmarshal[tpm2.TPMSAttest](quote)
+	if err != nil {
+		return fmt.Errorf("decoding attestation data: %w", err)
+	}
+
+	// Check if this is a quote attestation
+	if attestData.Type != tpm2.TPMSTAttestQuote {
+		return fmt.Errorf("not a quote attestation, got type: %v", attestData.Type)
+	}
+
+	// Parse the quote contents to extract PCR selection and digest
+	if len(attestData.ExtraData.Buffer) == 0 {
+		return fmt.Errorf("no quote data in attestation")
+	}
+
+	// Parse the quote info from the extra data
+	quoteInfo, err := tpm2.Unmarshal[tpm2.TPMSQuoteInfo](attestData.ExtraData.Buffer)
+	if err != nil {
+		return fmt.Errorf("parsing quote info: %w", err)
+	}
+
+	// Extract PCR selection from the quote info
+	selectedPCRs := make(map[int]bool)
+	if len(quoteInfo.PCRSelect.PCRSelections) > 0 {
+		// Parse the PCR selection to get the selected PCRs
+		for _, pcrSelection := range quoteInfo.PCRSelect.PCRSelections {
+			// Extract PCR selection from the bitmap
+			for i := 0; i < len(pcrSelection.PCRSelect); i++ {
+				byteVal := pcrSelection.PCRSelect[i]
+				for bit := 0; bit < 8; bit++ {
+					if byteVal&(1<<bit) != 0 {
+						pcrIndex := i*8 + bit
+						selectedPCRs[pcrIndex] = true
+					}
+				}
+			}
+		}
+	}
+
+	// Verify that all provided PCRs were selected in the quote
+	for pcrIndex := range providedPCRs {
+		if !selectedPCRs[pcrIndex] {
+			return fmt.Errorf("PCR %d was provided but not selected in the quote", pcrIndex)
+		}
+	}
+
+	// Verify that all selected PCRs were provided
+	for pcrIndex := range selectedPCRs {
+		if _, exists := providedPCRs[pcrIndex]; !exists {
+			return fmt.Errorf("PCR %d was selected in the quote but not provided", pcrIndex)
+		}
+	}
+
+	// Verify that the provided PCRs, when hashed, match the quote digest
+	if err := verifyPCRDigest(quoteInfo.PCRDigest.Buffer, providedPCRs, selectedPCRs); err != nil {
+		return fmt.Errorf("PCR digest verification failed: %w", err)
+	}
+
+	return nil
+}
+
+// verifyPCRDigest verifies that the provided PCRs, when hashed, match the quote digest
+func verifyPCRDigest(quoteDigest []byte, providedPCRs map[int][]byte, selectedPCRs map[int]bool) error {
+	// Calculate the digest of the provided PCRs in the same order as the TPM
+	// The TPM calculates the digest by concatenating the PCR values in order
+	var pcrData []byte
+	for pcrIndex := 0; pcrIndex < 24; pcrIndex++ { // TPM has 24 PCRs (0-23)
+		if selectedPCRs[pcrIndex] {
+			if pcrValue, exists := providedPCRs[pcrIndex]; exists {
+				pcrData = append(pcrData, pcrValue...)
+			} else {
+				return fmt.Errorf("PCR %d was selected but not provided", pcrIndex)
+			}
+		}
+	}
+
+	// Calculate the hash of the PCR data
+	hash := sha256.Sum256(pcrData)
+
+	// Compare with the quote digest
+	if len(quoteDigest) != len(hash) {
+		return fmt.Errorf("PCR digest length mismatch: expected %d bytes, got %d bytes",
+			len(quoteDigest), len(hash))
+	}
+
+	for i, b := range quoteDigest {
+		if b != hash[i] {
+			return fmt.Errorf("PCR digest mismatch at byte %d", i)
+		}
+	}
+
+	return nil
 }
 
 // GetEK retrieves the Endorsement Key from the TPM

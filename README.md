@@ -179,6 +179,9 @@ func GenerateChallenge(ek *attest.EK, akParams *attest.AttestationParameters) ([
 
 // Validate challenge responses
 func ValidateChallenge(secret, resp []byte) error
+
+// Verify PCR quote signature and ensure PCR values are cryptographically bound to the quote
+func VerifyPCRQuote(quoteBytes []byte, akPublic crypto.PublicKey) (map[int][]byte, error)
 ```
 
 #### WebSocket Protocol Flow
@@ -278,8 +281,9 @@ func handleTPMAttestation(w http.ResponseWriter, r *http.Request) {
         return
     }
     
-    // 7. Verify PCR quote (optional additional verification)
-    if !verifyPCRQuote(proofReq.PCRQuote, tpmHash) {
+    // 7. Verify PCR quote signature and PCR consistency
+    verifiedPCRs, err := tpm.VerifyPCRQuote(proofReq.PCRQuote, akPublicKey)
+    if err != nil {
         sendError(conn, "PCR quote verification failed")
         return
     }
@@ -389,6 +393,37 @@ Please verify the file or remove it manually and retry: /etc/kairos/ak.blob
 
 failed to load existing AK blob file (this may indicate corruption or version mismatch). 
 Please verify the file or remove it manually and retry. File: /etc/kairos/ak.blob
+```
+
+### PCR Quote Verification
+
+The `VerifyPCRQuote` function provides comprehensive verification of TPM PCR quotes:
+
+#### What It Does
+
+1. **Signature Verification**: Verifies the PCR quote signature using the Attestation Key (AK) public key
+2. **PCR Consistency Check**: Ensures the provided PCR values match what was actually quoted by the TPM
+3. **Cryptographic Binding**: Verifies that PCR values are cryptographically bound to the quote digest
+
+#### Security Guarantees
+
+- **Authenticity**: The quote signature proves the quote came from a genuine TPM
+- **Integrity**: PCR values are verified against the TPM quote digest
+- **Non-repudiation**: An attacker cannot provide fake PCR values without also providing a fake quote signature
+
+#### Usage Example
+
+```go
+// Verify PCR quote and get verified PCR values
+verifiedPCRs, err := tpm.VerifyPCRQuote(quoteBytes, akPublicKey)
+if err != nil {
+    return fmt.Errorf("PCR quote verification failed: %w", err)
+}
+
+// Use verified PCR values for enrollment or verification
+for pcrIndex, pcrValue := range verifiedPCRs {
+    fmt.Printf("PCR %d: %x\n", pcrIndex, pcrValue)
+}
 ```
 
 ### PCR Measurements
