@@ -35,7 +35,6 @@ func NewAKManager(opts ...Option) (*AKManager, error) {
 		return nil, fmt.Errorf("opening TPM: %w", err)
 	}
 
-	fmt.Printf("DEBUG: AKManager created with TPM session: %p\n", tpm)
 	return &AKManager{config: c, tpm: tpm}, nil
 }
 
@@ -49,7 +48,6 @@ func (m *AKManager) Close() error {
 		_ = m.ak.Close(m.tpm)
 		m.ak = nil
 	}
-	fmt.Printf("DEBUG: Closing TPM session: %p\n", m.tpm)
 	err := m.tpm.Close()
 	m.tpm = nil
 	return err
