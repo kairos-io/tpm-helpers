@@ -3,7 +3,6 @@ package tpm
 import (
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/google/go-tpm/tpm2"
 )
@@ -167,19 +166,5 @@ func UndefineBlob(opts ...TPMOption) error {
 
 // isNVSpaceAlreadyDefined checks if the error indicates that the NV space is already defined.
 func isNVSpaceAlreadyDefined(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	// Check if it's the specific TPM error code
-	var tpmErr tpm2.TPMRC
-	if errors.As(err, &tpmErr) {
-		return tpmErr == tpm2.TPMRCNVDefined
-	}
-
-	// Fallback to string matching for other error formats
-	errStr := strings.ToLower(err.Error())
-	return strings.Contains(errStr, "nv_defined") ||
-		strings.Contains(errStr, "already defined") ||
-		strings.Contains(errStr, "index already")
+	return err != nil && errors.Is(err, tpm2.TPMRCNVDefined)
 }
