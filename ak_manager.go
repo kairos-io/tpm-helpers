@@ -14,6 +14,13 @@ import (
 	"github.com/google/go-tpm/tpm2"
 )
 
+const (
+	// maxPCRCount is the maximum number of PCRs in a TPM (0-23)
+	maxPCRCount = 24
+	// maxPCRIndex is the maximum valid PCR index (maxPCRCount - 1)
+	maxPCRIndex = maxPCRCount - 1
+)
+
 // AKManager manages ephemeral Attestation Keys for TPM attestation.
 // No persistent storage is required - AKs are created fresh for each attestation.
 type AKManager struct {
@@ -120,8 +127,8 @@ func (m *AKManager) GeneratePCRQuote(pcrs []int) ([]byte, error) {
 		return nil, fmt.Errorf("at least one PCR index must be specified")
 	}
 	for _, p := range pcrs {
-		if p < 0 || p > 23 {
-			return nil, fmt.Errorf("PCR index %d is out of range (0-23)", p)
+		if p < 0 || p > maxPCRIndex {
+			return nil, fmt.Errorf("PCR index %d is out of range (0-%d)", p, maxPCRIndex)
 		}
 	}
 	quote, err := ak.QuotePCRs(m.tpm, nil, attest.HashSHA256, pcrs)
@@ -310,7 +317,7 @@ func verifyPCRDigest(quoteDigest []byte, providedPCRs map[int][]byte, selectedPC
 	// Calculate the digest of the provided PCRs in the same order as the TPM
 	// The TPM calculates the digest by concatenating the PCR values in order
 	var pcrData []byte
-	for pcrIndex := 0; pcrIndex < 24; pcrIndex++ { // TPM has 24 PCRs (0-23)
+	for pcrIndex := 0; pcrIndex < maxPCRCount; pcrIndex++ {
 		if selectedPCRs[pcrIndex] {
 			if pcrValue, exists := providedPCRs[pcrIndex]; exists {
 				pcrData = append(pcrData, pcrValue...)
