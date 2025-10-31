@@ -140,20 +140,6 @@ The WebSocket approach provides inherent security against replay attacks without
 - **Cleaner Architecture**: Single connection handles entire flow
 - **Reduced Attack Surface**: Fewer moving parts means fewer vulnerabilities
 
-### Error Handling and Corrupted Files
-
-#### AK File Corruption
-If an AK blob file becomes corrupted, `GetOrCreateAK()` will return descriptive errors rather than automatically deleting the file:
-
-- **Empty files (0 bytes)**: Returns error asking user to manually remove the file
-- **Suspiciously small files (<50 bytes)**: Returns error suggesting potential corruption
-- **JSON parsing failures**: Returns error indicating corruption or version mismatch
-
-**Important**: The library will NOT automatically remove corrupted AK files because they may represent data that is enrolled on the server side. Manual intervention ensures users can assess the situation before taking destructive actions.
-
-#### Example Error Messages
-The library returns descriptive error messages when AK files are corrupted, asking users to manually verify or remove the file before retrying.
-
 ### PCR Quote Verification
 
 The `VerifyPCRQuote` function provides comprehensive verification of TPM PCR quotes:
