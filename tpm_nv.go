@@ -26,7 +26,7 @@ func StoreBlob(blob []byte, opts ...TPMOption) error {
 	// Create the TPMS_NV_PUBLIC structure
 	nvPublic := tpm2.TPMSNVPublic{
 		NVIndex:    tpm2.TPMHandle(o.index),
-		NameAlg:    tpm2.TPMAlgSHA1,
+		NameAlg:    tpm2.TPMAlgSHA256,
 		Attributes: o.nvAttr,
 		DataSize:   uint16(len(blob)), // Use actual blob size
 	}
