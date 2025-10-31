@@ -1,6 +1,6 @@
 # tpm-helpers
 
-A fork of https://github.com/rancher-sandbox/go-tpm with additional capabilities for TPM.
+This repository started as a fork of https://github.com/rancher-sandbox/go-tpm with additional capabilities for TPM.
 
 ## Remote Attestation with KMS
 
@@ -10,7 +10,7 @@ This library provides a complete implementation for remote attestation with a Ke
 
 The remote attestation flow allows a machine to:
 1. **Prove its TPM identity** to a remote KMS
-2. **Demonstrate boot state integrity** via PCR measurements  
+2. **Demonstrate boot state integrity** via PCR measurements
 3. **Obtain decryption passphrases** securely over a WebSocket connection
 
 The client doesn't need to know whether it's the first time contacting the KMS (enrollment) or a repeat visit (verification) — the same flow works for both.
@@ -18,7 +18,7 @@ The client doesn't need to know whether it's the first time contacting the KMS (
 ### Security Guarantees
 
 - **TPM Identity**: Endorsement Key (EK) proves requests come from a genuine TPM
-- **Key Binding**: Attestation Key (AK) is bound to the specific TPM chip  
+- **Key Binding**: Attestation Key (AK) is bound to the specific TPM chip
 - **Boot State Verification**: PCRs 0, 7, 11 prove system integrity hasn't changed
 - **Connection Security**: WebSocket connection provides session binding and prevents replay attacks
 - **Cryptographic Proof**: TPM quotes and credential activation provide cryptographic proof of TPM ownership
@@ -79,49 +79,49 @@ func RequestDecryptionPassphraseWebSocket() ([]byte, error) {
     if err != nil {
         return nil, err
     }
-    
+
     // Ensure AK exists
     _, err = akManager.GetOrCreateAK()
     if err != nil {
         return nil, err
     }
-    
+
     // Connect to KMS WebSocket endpoint
     conn, err := tpm.AttestationConnection("wss://kms.example.com/attestation")
     if err != nil {
         return nil, err
     }
     defer conn.Close()
-    
+
     // Get attestation data using go-attestation native types
     ek, akParams, err := akManager.GetAttestationData()
     if err != nil {
         return nil, err
     }
-    
+
     // Server immediately sends challenge upon connection
     var challengeResp AttestationChallengeResponse
     if err := conn.ReadJSON(&challengeResp); err != nil {
         return nil, fmt.Errorf("reading challenge: %w", err)
     }
-    
+
     // Generate proof of TPM ownership
     proofReq, err := akManager.CreateProofRequest(&challengeResp)
     if err != nil {
         return nil, err
     }
-    
+
     // Send proof to server
     if err := conn.WriteJSON(proofReq); err != nil {
         return nil, fmt.Errorf("sending proof: %w", err)
     }
-    
+
     // Receive passphrase from server
     var proofResp ProofResponse
     if err := conn.ReadJSON(&proofResp); err != nil {
         return nil, fmt.Errorf("reading passphrase: %w", err)
     }
-    
+
     return proofResp.Passphrase, nil
 }
 ```
@@ -130,7 +130,7 @@ func RequestDecryptionPassphraseWebSocket() ([]byte, error) {
 
 The WebSocket flow uses these data structures for the attestation protocol:
 
-#### AttestationChallengeResponse  
+#### AttestationChallengeResponse
 ```go
 type AttestationChallengeResponse struct {
     Challenge *attest.EncryptedCredential // Credential activation challenge
@@ -171,7 +171,7 @@ The library provides helper functions for KMS WebSocket server implementation.
 #### Available Server Functions
 
 ```go
-// Parse attestation data from client requests  
+// Parse attestation data from client requests
 func DecodeEK(pemBytes []byte) (*attest.EK, error)
 
 // Generate credential activation challenge using go-attestation native types
@@ -210,21 +210,21 @@ func handleTPMAttestation(w http.ResponseWriter, r *http.Request) {
     upgrader := websocket.Upgrader{
         CheckOrigin: func(r *http.Request) bool { return true },
     }
-    
+
     conn, err := upgrader.Upgrade(w, r, nil)
     if err != nil {
         http.Error(w, "WebSocket upgrade failed", http.StatusBadRequest)
         return
     }
     defer conn.Close()
-    
+
     // Get client's attestation data (sent during WebSocket handshake or first message)
     ek, akParams, err := getClientAttestationData(conn)
     if err != nil {
         sendError(conn, "Failed to get attestation data")
         return
     }
-    
+
     // 1. Check enrollment vs verification
     enrolled := false
     tpmHash := hashEK(ek) // Your TPM identification logic
@@ -237,64 +237,64 @@ func handleTPMAttestation(w http.ResponseWriter, r *http.Request) {
         }
         enrolled = true
     } else {
-        // Verification: validate PCRs match stored values  
+        // Verification: validate PCRs match stored values
         if !attestationMatches(tpmHash, akParams) {
             sendError(conn, "PCR values changed - possible compromise")
             return
         }
     }
-    
+
     // 2. Generate challenge using go-attestation native types
     secret, challengeBytes, err := tpm.GenerateChallenge(ek, akParams)
     if err != nil {
         sendError(conn, "Failed to generate challenge")
         return
     }
-    
+
     // 3. Store secret for this WebSocket session
-    sessionID := generateSessionID() 
+    sessionID := generateSessionID()
     storeSessionSecret(sessionID, secret)
-    
+
     // 4. Parse and send challenge to client
     var challenge Challenge
     json.Unmarshal(challengeBytes, &challenge)
-    
+
     challengeResp := &AttestationChallengeResponse{
         Challenge: challenge.EC,
     }
-    
+
     if err := conn.WriteJSON(challengeResp); err != nil {
         return
     }
-    
+
     // 5. Wait for proof from client
     var proofReq ProofRequest
     if err := conn.ReadJSON(&proofReq); err != nil {
         sendError(conn, "Failed to read proof")
         return
     }
-    
+
     // 6. Validate challenge response
     respBytes, _ := json.Marshal(ChallengeResponse{Secret: proofReq.Secret})
     if err := tpm.ValidateChallenge(secret, respBytes); err != nil {
         sendError(conn, "Challenge validation failed")
         return
     }
-    
+
     // 7. Verify PCR quote signature and PCR consistency
     verifiedPCRs, err := tpm.VerifyPCRQuote(proofReq.PCRQuote, akPublicKey)
     if err != nil {
         sendError(conn, "PCR quote verification failed")
         return
     }
-    
+
     // 8. Send passphrase to client
     proofResp := &ProofResponse{
         Passphrase: getDecryptionPassphrase(tpmHash),
     }
-    
+
     conn.WriteJSON(proofResp)
-    
+
     // Connection closes automatically, preventing reuse
 }
 ```
@@ -342,7 +342,7 @@ The WebSocket approach provides inherent security against replay attacks without
 **Why WebSockets Prevent Replay Attacks:**
 
 - ✅ **Fresh Connection Required**: Each attestation requires a new WebSocket connection
-- ✅ **Fresh Challenge**: Server generates a new challenge for each connection  
+- ✅ **Fresh Challenge**: Server generates a new challenge for each connection
 - ✅ **Session Isolation**: Secrets are tied to the specific connection session
 - ✅ **Sequential Flow**: Cannot skip challenge step to request passphrase
 - ✅ **Connection Closure**: Automatic cleanup when connection ends
@@ -355,7 +355,7 @@ The WebSocket approach provides inherent security against replay attacks without
    - Old challenge response won't match new challenge
 
 2. **Man-in-the-Middle**: Even if attacker captures the entire flow:
-   - They still need to establish their own WebSocket connection  
+   - They still need to establish their own WebSocket connection
    - Server will issue a different challenge
    - Captured responses won't work with the new challenge
 
@@ -378,20 +378,20 @@ The WebSocket approach provides inherent security against replay attacks without
 If an AK blob file becomes corrupted, `GetOrCreateAK()` will return descriptive errors rather than automatically deleting the file:
 
 - **Empty files (0 bytes)**: Returns error asking user to manually remove the file
-- **Suspiciously small files (<50 bytes)**: Returns error suggesting potential corruption  
+- **Suspiciously small files (<50 bytes)**: Returns error suggesting potential corruption
 - **JSON parsing failures**: Returns error indicating corruption or version mismatch
 
 **Important**: The library will NOT automatically remove corrupted AK files because they may represent data that is enrolled on the server side. Manual intervention ensures users can assess the situation before taking destructive actions.
 
 #### Example Error Messages
 ```
-AK blob file exists but is empty (0 bytes) - this indicates corruption. 
+AK blob file exists but is empty (0 bytes) - this indicates corruption.
 Please remove the file manually and retry: /etc/kairos/ak.blob
 
-AK blob file is suspiciously small (15 bytes) - this may indicate corruption. 
+AK blob file is suspiciously small (15 bytes) - this may indicate corruption.
 Please verify the file or remove it manually and retry: /etc/kairos/ak.blob
 
-failed to load existing AK blob file (this may indicate corruption or version mismatch). 
+failed to load existing AK blob file (this may indicate corruption or version mismatch).
 Please verify the file or remove it manually and retry. File: /etc/kairos/ak.blob
 ```
 

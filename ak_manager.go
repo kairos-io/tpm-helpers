@@ -97,7 +97,6 @@ func (m *AKManager) GetAKPublicKey() (crypto.PublicKey, error) {
 	return publicKeyFromTPMTPublic(pub)
 }
 
-// PerformAttestation performs a complete attestation flow using a transient AK
 // ActivateCredential activates a credential using the cached AK
 func (m *AKManager) ActivateCredential(challenge *attest.EncryptedCredential) ([]byte, error) {
 	ak, err := m.GetAK()
