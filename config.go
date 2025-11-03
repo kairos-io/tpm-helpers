@@ -13,6 +13,7 @@ type config struct {
 	emulated       bool
 	commandChannel attest.CommandChannelTPM20
 	seed           int64
+	device         string
 
 	cacerts []byte
 	header  http.Header
@@ -79,6 +80,14 @@ func WithSeed(s int64) Option {
 func WithCommandChannel(cc attest.CommandChannelTPM20) Option {
 	return func(c *config) error {
 		c.commandChannel = cc
+		return nil
+	}
+}
+
+// WithTPMDevice sets the TPM device path for config
+func WithTPMDevice(device string) Option {
+	return func(c *config) error {
+		c.device = device
 		return nil
 	}
 }
