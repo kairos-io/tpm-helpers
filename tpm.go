@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/go-attestation/attest"
 	"github.com/google/go-tpm-tools/simulator"
+	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/kairos-io/tpm-helpers/backend"
 	"github.com/pkg/errors"
 )
@@ -47,11 +48,18 @@ func getTPM(c *config) (*attest.TPM, error) {
 	cfg := &attest.OpenConfig{
 		TPMVersion: attest.TPMVersion20,
 	}
+
+	// Priority: commandChannel > device > emulated
 	if c.commandChannel != nil {
 		cfg.CommandChannel = c.commandChannel
-	}
-
-	if c.emulated {
+	} else if c.device != "" {
+		// Open the specified TPM device and create a command channel from it
+		tpmTransport, err := transport.OpenTPM(c.device)
+		if err != nil {
+			return nil, fmt.Errorf("opening TPM device %s: %w", c.device, err)
+		}
+		cfg.CommandChannel = backend.FromTransport(tpmTransport)
+	} else if c.emulated {
 		var sim *simulator.Simulator
 		var err error
 		if c.seed != 0 {
