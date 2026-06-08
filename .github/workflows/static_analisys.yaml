@@ -11,7 +11,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
-        go-version: '1.24'
+        go-version: '1.26.4'
     - name: Get dependencies
       run: |
         # Needed for github.com/google/go-tspi/tspi
@@ -24,6 +24,10 @@ jobs:
       uses: golangci/golangci-lint-action@v7
       with:
         version: v2.4.0
+        # Build golangci-lint from source with the project's Go toolchain so it
+        # is compiled with Go >= the go.mod directive (1.26.4). The prebuilt
+        # binaries are built with go1.25 and refuse to lint a newer target.
+        install-mode: goinstall
         args: --build-tags ci
 
     - name: Vet

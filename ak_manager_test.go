@@ -73,17 +73,16 @@ var _ = Describe("AK Manager - Transient AK Implementation", func() {
 				Expect(key.E).To(BeNumerically("<=", 1<<31-1), "RSA exponent should be reasonable")
 
 			case *ecdsa.PublicKey:
-				// Verify ECDSA public key is on the curve
+				// Validate the ECDSA public key without touching the raw big.Int
+				// coordinates (key.X/key.Y and Curve.IsOnCurve are deprecated as of
+				// Go 1.26). (*ecdsa.PublicKey).ECDH() returns an error when the key is
+				// not on the curve or is the point at infinity, so it covers the same
+				// checks.
 				Expect(key.Curve).ToNot(BeNil(), "ECDSA curve should not be nil")
-				Expect(key.X).ToNot(BeNil(), "ECDSA X coordinate should not be nil")
-				Expect(key.Y).ToNot(BeNil(), "ECDSA Y coordinate should not be nil")
 
-				// Verify the point is actually on the curve
-				Expect(key.Curve.IsOnCurve(key.X, key.Y)).To(BeTrue(), "ECDSA public key point should be on the curve")
-
-				// Verify it's not the point at infinity (X=0, Y=0)
-				Expect(key.X.Sign()).ToNot(Equal(0), "ECDSA X coordinate should not be zero")
-				Expect(key.Y.Sign()).ToNot(Equal(0), "ECDSA Y coordinate should not be zero")
+				ecdhKey, err := key.ECDH()
+				Expect(err).ToNot(HaveOccurred(), "ECDSA public key should be valid (on-curve and not the point at infinity)")
+				Expect(ecdhKey.Bytes()).ToNot(BeEmpty(), "ECDSA public key encoding should not be empty")
 
 			default:
 				Fail(fmt.Sprintf("Expected RSA or ECDSA public key, got %T", pubKey))
