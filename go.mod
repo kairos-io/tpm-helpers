@@ -1,8 +1,6 @@
 module github.com/kairos-io/tpm-helpers
 
-go 1.23.0
-
-toolchain go1.24
+go 1.26.4
 
 require (
 	github.com/google/certificate-transparency-go v1.1.4
@@ -26,9 +24,9 @@ require (
 	github.com/stretchr/testify v1.9.0 // indirect
 	go.uber.org/automaxprocs v1.6.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
-	golang.org/x/crypto v0.41.0 // indirect
-	golang.org/x/net v0.43.0 // indirect
-	golang.org/x/sys v0.35.0 // indirect
-	golang.org/x/text v0.28.0 // indirect
-	golang.org/x/tools v0.36.0 // indirect
+	golang.org/x/crypto v0.52.0 // indirect
+	golang.org/x/net v0.55.0 // indirect
+	golang.org/x/sys v0.45.0 // indirect
+	golang.org/x/text v0.37.0 // indirect
+	golang.org/x/tools v0.44.0 // indirect
 )
