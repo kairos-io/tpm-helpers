@@ -153,7 +153,7 @@ func (m *AKManager) GeneratePCRQuote(pcrs []int) ([]byte, error) {
 		} `json:"quote"`
 		PCRs map[int][]byte `json:"pcrs"`
 	}{}
-	payload.Quote.Version = fmt.Sprintf("%d", quote.Version)
+	payload.Quote.Version = "2"
 	payload.Quote.Quote = quote.Quote
 	payload.Quote.Signature = quote.Signature
 	payload.PCRs = sel

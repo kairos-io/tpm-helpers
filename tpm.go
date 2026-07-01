@@ -45,9 +45,7 @@ func GetPubHash(opts ...Option) (string, error) {
 
 func getTPM(c *config) (*attest.TPM, error) {
 
-	cfg := &attest.OpenConfig{
-		TPMVersion: attest.TPMVersion20,
-	}
+	cfg := &attest.OpenConfig{}
 
 	// Priority: commandChannel > device > emulated
 	if c.commandChannel != nil {
