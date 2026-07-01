@@ -11,7 +11,8 @@ import (
 )
 
 // OpenTransport opens a TPM transport for the given device path.
-// When path is empty, it tries /dev/tpmrm0 then /dev/tpm0.
+// When path is empty, it opens /dev/tpmrm0 and falls back to /dev/tpm0 only
+// if /dev/tpmrm0 does not exist.
 func OpenTransport(path string) (transport.TPMCloser, error) {
 	if path == "" {
 		tpm, err := linuxtpm.Open("/dev/tpmrm0")
