@@ -10,6 +10,7 @@ import (
 	"github.com/google/go-tpm/tpm2/transport"
 	"github.com/google/go-tpm/tpm2/transport/simulator"
 	"github.com/google/go-tpm/tpmutil"
+	"github.com/kairos-io/tpm-helpers/backend"
 )
 
 // TPMOptions contains configuration options for TPM operations including device path,
@@ -68,7 +69,7 @@ func getTPMTransport(o *TPMOptions) (*TPMTransportWrapper, error) {
 			shouldClose: false, // Don't close shared emulated device
 		}, nil
 	}
-	tpm, err := transport.OpenTPM(o.device)
+	tpm, err := backend.OpenTransport(o.device)
 	if err != nil {
 		return nil, err
 	}

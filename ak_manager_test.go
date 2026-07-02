@@ -155,7 +155,7 @@ var _ = Describe("AK Manager - Transient AK Implementation", func() {
 			Expect(err).ToNot(HaveOccurred())
 
 			// Generate a challenge using the existing GenerateChallenge function
-			ap := attest.ActivationParameters{TPMVersion: attest.TPMVersion20, EK: ek.Public, AK: *akParams}
+			ap := attest.ActivationParameters{EK: ek.Public, AK: *akParams}
 			expectedSecret, ec, err := ap.Generate()
 			Expect(err).ToNot(HaveOccurred())
 			Expect(expectedSecret).ToNot(BeEmpty())
