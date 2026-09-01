@@ -2,6 +2,11 @@
 
 This repository started as a fork of https://github.com/rancher-sandbox/go-tpm with additional capabilities for TPM.
 
+> **Found a bug, or want to request a feature?** Open it on
+> [kairos-io/kairos](https://github.com/kairos-io/kairos/issues), including
+> issues about this repository. Every Kairos issue lives in one place, so you
+> never have to work out which repository to file against.
+
 ## Remote Attestation with KMS
 
 This library provides a complete implementation for remote attestation with a Key Management Service (KMS) using TPM-based cryptographic proofs over WebSocket connections. The flow supports both initial enrollment and subsequent verification seamlessly.
