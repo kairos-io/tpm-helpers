@@ -7,7 +7,7 @@ require (
 	github.com/google/go-attestation v0.6.1
 	github.com/google/go-tpm v0.9.8
 	github.com/google/go-tpm-tools v0.4.7
-	github.com/gorilla/websocket v1.5.0
+	github.com/gorilla/websocket v1.5.3
 	github.com/onsi/ginkgo/v2 v2.25.3
 	github.com/onsi/gomega v1.38.2
 	github.com/pkg/errors v0.9.1
