@@ -137,9 +137,21 @@ The WebSocket approach provides inherent security against replay attacks without
    - Reuse of authentication across sessions
    - Bypassing the challenge step
 
+#### What the Connection Does Not Cover
+
+All of the above is about the challenge and the secret recovered from it. It
+holds against an attacker on the network, because such an attacker cannot open
+the connection and recover the secret.
+
+It does not hold against the node itself, which is the adversary measured boot
+exists to catch. A compromised node can open a perfectly fresh connection and
+answer a perfectly fresh challenge, because credential activation only proves
+that the TPM is present, not what the machine booted. So the PCR quote needs
+its own freshness, and it gets it from the nonce the TPM signs into it as
+qualifying data. See the next section.
+
 #### Implementation Benefits
 
-- **Simpler Code**: No nonce generation, storage, or validation logic needed
 - **Better Performance**: No database/cache operations for nonce management
 - **Natural Security**: WebSocket protocol provides session binding
 - **Cleaner Architecture**: Single connection handles entire flow
@@ -152,14 +164,27 @@ The `VerifyPCRQuote` function provides comprehensive verification of TPM PCR quo
 #### What It Does
 
 1. **Signature Verification**: Verifies the PCR quote signature using the Attestation Key (AK) public key
-2. **PCR Consistency Check**: Ensures the provided PCR values match what was actually quoted by the TPM
-3. **Cryptographic Binding**: Verifies that PCR values are cryptographically bound to the quote digest
+2. **Freshness Check**: Verifies that the quote carries the nonce the verifier issued for this exchange
+3. **PCR Consistency Check**: Ensures the provided PCR values match what was actually quoted by the TPM
+4. **Cryptographic Binding**: Verifies that PCR values are cryptographically bound to the quote digest
 
 #### Security Guarantees
 
 - **Authenticity**: The quote signature proves the quote came from a genuine TPM
+- **Freshness**: The TPM signs the verifier's nonce into the quote, so a quote recorded during an earlier boot does not verify
 - **Integrity**: PCR values are verified against the TPM quote digest
 - **Non-repudiation**: An attacker cannot provide fake PCR values without also providing a fake quote signature
+
+#### Choosing a Nonce
+
+`GeneratePCRQuote` and `VerifyPCRQuote` both require a nonce, and both reject an
+empty one. The verifier picks it, and it must be unpredictable and used once.
+
+The credential activation secret satisfies both: the verifier generates 32 fresh
+random bytes per exchange, and only the TPM that owns the endorsement key can
+recover them. `CreateProofRequest` therefore quotes with the secret it just
+recovered, and the verifier checks the quote against the secret it issued, with
+no extra round trip.
 
 ### PCR Measurements
 

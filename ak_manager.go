@@ -6,6 +6,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"math/big"
@@ -117,11 +118,20 @@ func (m *AKManager) ActivateCredential(challenge *attest.EncryptedCredential) ([
 	return secret, nil
 }
 
-// GeneratePCRQuote generates a PCR quote using the cached AK
-func (m *AKManager) GeneratePCRQuote(pcrs []int) ([]byte, error) {
+// GeneratePCRQuote generates a PCR quote using the cached AK.
+//
+// nonce is the qualifying data the TPM signs into the quote. It ties the quote
+// to one attestation exchange: without it the quote is an undated statement
+// that some PCR values held at some point, and a verifier cannot tell a fresh
+// quote from one recorded during an earlier boot. The verifier supplies it, so
+// it must be unpredictable and used once.
+func (m *AKManager) GeneratePCRQuote(pcrs []int, nonce []byte) ([]byte, error) {
 	ak, err := m.GetAK()
 	if err != nil {
 		return nil, err
+	}
+	if len(nonce) == 0 {
+		return nil, fmt.Errorf("a nonce is required to bind the quote to this attestation")
 	}
 	if len(pcrs) == 0 {
 		return nil, fmt.Errorf("at least one PCR index must be specified")
@@ -131,7 +141,7 @@ func (m *AKManager) GeneratePCRQuote(pcrs []int) ([]byte, error) {
 			return nil, fmt.Errorf("PCR index %d is out of range (0-%d)", p, maxPCRIndex)
 		}
 	}
-	quote, err := ak.QuotePCRs(m.tpm, nil, attest.HashSHA256, pcrs)
+	quote, err := ak.QuotePCRs(m.tpm, nonce, attest.HashSHA256, pcrs)
 	if err != nil {
 		return nil, fmt.Errorf("generating PCR quote: %w", err)
 	}
@@ -166,9 +176,17 @@ func (m *AKManager) GeneratePCRQuote(pcrs []int) ([]byte, error) {
 
 // VerifyPCRQuote verifies a PCR quote and ensures PCR values are consistent with the quote
 // Returns the verified PCR values.
-func VerifyPCRQuote(quoteBytes []byte, akPublic crypto.PublicKey) (map[int][]byte, error) {
+//
+// nonce is the qualifying data this verifier handed out for this exchange. The
+// quote must carry it, otherwise a quote recorded from an earlier, healthy boot
+// would verify just as well as the current one.
+func VerifyPCRQuote(quoteBytes []byte, akPublic crypto.PublicKey, nonce []byte) (map[int][]byte, error) {
 	if len(quoteBytes) == 0 {
 		return nil, fmt.Errorf("empty quote data")
+	}
+
+	if len(nonce) == 0 {
+		return nil, fmt.Errorf("a nonce is required to verify the quote is fresh")
 	}
 
 	// Parse the quote structure
@@ -190,8 +208,9 @@ func VerifyPCRQuote(quoteBytes []byte, akPublic crypto.PublicKey) (map[int][]byt
 		return nil, fmt.Errorf("quote signature verification failed: %w", err)
 	}
 
-	// Verify that the provided PCRs are consistent with the quote
-	if err := verifyPCRsAgainstQuote(quoteData.Quote.Quote, quoteData.PCRs); err != nil {
+	// Verify that the quote was produced for this exchange and that the
+	// provided PCRs are consistent with it
+	if err := verifyPCRsAgainstQuote(quoteData.Quote.Quote, quoteData.PCRs, nonce); err != nil {
 		return nil, fmt.Errorf("PCR verification against quote failed: %w", err)
 	}
 
@@ -253,8 +272,9 @@ func verifyQuoteSignature(quote, signature []byte, akPublic crypto.PublicKey) er
 	}
 }
 
-// verifyPCRsAgainstQuote verifies that the provided PCRs are consistent with the TPM quote
-func verifyPCRsAgainstQuote(quote []byte, providedPCRs map[int][]byte) error {
+// verifyPCRsAgainstQuote verifies that the quote answers the nonce we issued and
+// that the provided PCRs are consistent with the TPM quote
+func verifyPCRsAgainstQuote(quote []byte, providedPCRs map[int][]byte, nonce []byte) error {
 	// Parse the TPM quote structure using modern go-tpm API
 	attestData, err := tpm2.Unmarshal[tpm2.TPMSAttest](quote)
 	if err != nil {
@@ -264,6 +284,12 @@ func verifyPCRsAgainstQuote(quote []byte, providedPCRs map[int][]byte) error {
 	// Check if this is a quote attestation
 	if attestData.Type != tpm2.TPMSTAttestQuote {
 		return fmt.Errorf("not a quote attestation, got type: %v", attestData.Type)
+	}
+
+	// The TPM signs the nonce into the quote as qualifying data. A quote
+	// carrying anything else was produced for a different exchange.
+	if subtle.ConstantTimeCompare(attestData.ExtraData.Buffer, nonce) != 1 {
+		return fmt.Errorf("quote was not produced for this attestation: qualifying data does not match the nonce")
 	}
 
 	// Get the quote info from the Attested union
@@ -403,8 +429,11 @@ func (m *AKManager) CreateProofRequest(challenge *AttestationChallengeResponse, 
 		return nil, fmt.Errorf("activating credential: %w", err)
 	}
 
-	// Generate a fresh PCR quote for cryptographic proof using requested PCRs
-	quote, err := m.GeneratePCRQuote(pcrs)
+	// Generate a fresh PCR quote for cryptographic proof using requested PCRs.
+	// The activation secret doubles as the quote nonce: the verifier generated
+	// it for this exchange and already knows what to expect, so no extra round
+	// trip is needed to prove the quote is current.
+	quote, err := m.GeneratePCRQuote(pcrs, secret)
 	if err != nil {
 		return nil, fmt.Errorf("generating quote: %w", err)
 	}
