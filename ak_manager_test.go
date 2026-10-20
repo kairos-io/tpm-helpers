@@ -109,7 +109,7 @@ var _ = Describe("AK Manager - Transient AK Implementation", func() {
 
 		It("should generate PCR quote with specified PCRs", func() {
 			pcrs := []int{0, 7, 11}
-			quoteBytes, err := manager.GeneratePCRQuote(pcrs)
+			quoteBytes, err := manager.GeneratePCRQuote(pcrs, []byte("a-verifier-supplied-nonce"))
 			Expect(err).ToNot(HaveOccurred())
 			Expect(quoteBytes).ToNot(BeEmpty())
 
@@ -121,16 +121,22 @@ var _ = Describe("AK Manager - Transient AK Implementation", func() {
 
 		It("should return error for invalid PCR indices", func() {
 			invalidPCRs := []int{-1, 24, 100}
-			_, err := manager.GeneratePCRQuote(invalidPCRs)
+			_, err := manager.GeneratePCRQuote(invalidPCRs, []byte("a-verifier-supplied-nonce"))
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("out of range"))
 		})
 
 		It("should return error for empty PCR list", func() {
 			emptyPCRs := []int{}
-			_, err := manager.GeneratePCRQuote(emptyPCRs)
+			_, err := manager.GeneratePCRQuote(emptyPCRs, []byte("a-verifier-supplied-nonce"))
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("at least one PCR"))
+		})
+
+		It("should return error for an empty nonce", func() {
+			_, err := manager.GeneratePCRQuote([]int{0, 7, 11}, nil)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("nonce is required"))
 		})
 	})
 
@@ -194,6 +200,21 @@ var _ = Describe("AK Manager - Transient AK Implementation", func() {
 			Expect(quoteInfo["version"]).ToNot(BeNil())
 			Expect(quoteInfo["quote"]).ToNot(BeNil())
 			Expect(quoteInfo["signature"]).ToNot(BeNil())
+
+			// The verifier accepts the quote only against the nonce it issued,
+			// which here is the activation secret it generated above
+			akPub, err := manager.GetAKPublicKey()
+			Expect(err).ToNot(HaveOccurred())
+
+			verified, err := VerifyPCRQuote(proofReq.PCRQuote, akPub, expectedSecret)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(verified).To(HaveKey(0))
+
+			otherSecret := append([]byte(nil), expectedSecret...)
+			otherSecret[0]++
+			_, err = VerifyPCRQuote(proofReq.PCRQuote, akPub, otherSecret)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("not produced for this attestation"))
 		})
 
 		// certification validation test removed (implicit via credential activation)
