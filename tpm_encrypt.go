@@ -23,11 +23,17 @@ type TPMRSAPrivateKey struct {
 	publicKey *rsa.PublicKey
 }
 
-// Public returns the public key corresponding to the private key
+// Public returns the public key corresponding to the private key, or nil when
+// it cannot be read from the TPM. The crypto.Decrypter interface leaves no room
+// to report the error, so callers that need one should use loadPublicKey.
 func (k *TPMRSAPrivateKey) Public() crypto.PublicKey {
 	if k.publicKey == nil {
-		// Lazy load the public key
-		_ = k.loadPublicKey() // Ignore error for lazy loading - key will be nil if it fails
+		// Returning k.publicKey here would hand back a non-nil crypto.PublicKey
+		// holding a nil *rsa.PublicKey, which passes a type assertion and
+		// panics at the first use.
+		if err := k.loadPublicKey(); err != nil {
+			return nil
+		}
 	}
 	return k.publicKey
 }
@@ -49,7 +55,7 @@ func (k *TPMRSAPrivateKey) loadPublicKey() error {
 	}
 
 	if pubContents.Type != tpm2.TPMAlgRSA {
-		return fmt.Errorf("key is not RSA")
+		return fmt.Errorf("key is not RSA, it is algorithm 0x%04x", uint16(pubContents.Type))
 	}
 
 	rsaDetail, err := pubContents.Parameters.RSADetail()
@@ -195,10 +201,14 @@ func EncryptBlob(blob []byte, opts ...TPMOption) ([]byte, error) {
 		}
 	}
 
-	// Get the public key (this will load it from TPM if needed)
-	pub := privateKey.Public().(*rsa.PublicKey)
+	// The handle can already hold a key that is not ours and not RSA, in which
+	// case the probe above succeeded and nothing was created. Read the public
+	// area here rather than through Public(), which has no way to report that.
+	if err := privateKey.loadPublicKey(); err != nil {
+		return []byte{}, fmt.Errorf("reading the public key at handle 0x%08x: %w", uint32(o.index), err)
+	}
 
-	return encryptWithPublicKey(blob, pub, o.hash)
+	return encryptWithPublicKey(blob, privateKey.publicKey, o.hash)
 }
 
 // createRSAKey creates a new RSA primary key and makes it persistent
