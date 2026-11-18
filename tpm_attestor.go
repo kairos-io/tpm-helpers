@@ -22,6 +22,7 @@ import (
 	stdx509 "crypto/x509"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -72,6 +73,21 @@ func pubBytes(ek *attest.EK) ([]byte, error) {
 	return data, nil
 }
 
+// tlsServerName returns the host name of a Host header, if one is set.
+// A caller that dials an address it resolved itself (an mDNS lookup, for
+// instance) passes the original name as Host, and the server certificate is
+// issued for that name, not for the address in the URL.
+func tlsServerName(header http.Header) string {
+	host := header.Get("Host")
+	if host == "" {
+		return ""
+	}
+	if name, _, err := net.SplitHostPort(host); err == nil {
+		return name
+	}
+	return strings.Trim(host, "[]")
+}
+
 // AttestationConnection returns a simple WebSocket connection for the new TPM attestation flow.
 func AttestationConnection(url string, opts ...Option) (*websocket.Conn, error) {
 	c := newConfig()
@@ -82,30 +98,33 @@ func AttestationConnection(url string, opts ...Option) (*websocket.Conn, error) 
 		header = http.Header{}
 	}
 
-	dialer := websocket.DefaultDialer
-	if len(c.cacerts) > 0 {
-		pool := stdx509.NewCertPool()
-		if c.systemfallback {
-			systemPool, err := stdx509.SystemCertPool()
-			if err != nil {
-				return nil, err
-			}
-			pool = systemPool
-		}
-
-		pool.AppendCertsFromPEM(c.cacerts)
-		dialer = &websocket.Dialer{
-			Proxy:            http.ProxyFromEnvironment,
-			HandshakeTimeout: 45 * time.Second,
-			TLSClientConfig: &tls.Config{
-				RootCAs: pool,
-			},
-		}
-	}
-
 	// Add any additional headers
 	for k, v := range c.headers {
 		header.Add(k, v)
+	}
+
+	dialer := websocket.DefaultDialer
+	serverName := tlsServerName(header)
+	if len(c.cacerts) > 0 || serverName != "" {
+		tlsConfig := &tls.Config{ServerName: serverName}
+		if len(c.cacerts) > 0 {
+			pool := stdx509.NewCertPool()
+			if c.systemfallback {
+				systemPool, err := stdx509.SystemCertPool()
+				if err != nil {
+					return nil, err
+				}
+				pool = systemPool
+			}
+
+			pool.AppendCertsFromPEM(c.cacerts)
+			tlsConfig.RootCAs = pool
+		}
+		dialer = &websocket.Dialer{
+			Proxy:            http.ProxyFromEnvironment,
+			HandshakeTimeout: 45 * time.Second,
+			TLSClientConfig:  tlsConfig,
+		}
 	}
 
 	wsURL := strings.Replace(url, "http", "ws", 1)
